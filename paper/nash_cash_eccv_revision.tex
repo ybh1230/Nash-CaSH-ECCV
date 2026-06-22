@@ -1,0 +1,140 @@
+\title{Nash-CaSH: Game-Theoretic Cross-Attention Harmonization for Training-Free Ultra-High-Resolution Video Generation}
+
+\begin{abstract}
+Generating ultra-high-resolution videos with pretrained video Diffusion Transformers is difficult because attention layers must operate far beyond the token scale observed during pretraining.
+Local window attention improves detail fidelity by preserving a native-scale receptive field, yet it can weaken global semantic coordination and create repeated structures.
+We propose Nash-CaSH, a training-free cross-attention harmonization strategy that treats local and global semantic evidence as two cooperative players in a Nash bargaining game.
+At each cross-attention layer, Nash-CaSH computes branch payoffs from query-output compatibility and response confidence, then derives a closed-form Nash social-welfare allocation to fuse the global branch and local branch.
+This adaptive equilibrium gate replaces fixed hand-tuned branch mixing and lets each token receive as much global semantic authority as it needs while retaining local detail when it is beneficial.
+Nash-CaSH is compatible with cached global cross-attention, enabling efficient high-resolution inference without model finetuning.
+\end{abstract}
+
+\section{Introduction}
+
+Video Diffusion Transformers have become a strong backbone for text-to-video generation, but their attention cost grows rapidly with spatial and temporal resolution.
+A model pretrained at native resolution can often generate plausible low-resolution videos, yet direct high-resolution inference introduces a distribution shift in token count and receptive field.
+The result is usually a trade-off: full attention preserves long-range structure but becomes expensive and may blur local details, while local attention improves texture and sharpness but can create repeated objects or inconsistent global layouts.
+
+This work studies a training-free solution for high-resolution video synthesis.
+The central idea is to preserve local native-scale evidence while still injecting global semantic coordination.
+Instead of using a fixed mixing coefficient between the local and global branches, we formulate the interaction as a token-wise bargaining problem.
+The local branch is responsible for training-scale detail fidelity; the global branch is responsible for semantic layout.
+Their relative influence should vary across denoising steps, layers, prompts, and spatial positions.
+
+We introduce Nash-CaSH, a Nash-equilibrium cross-attention harmonizer.
+For every cross-attention output, Nash-CaSH estimates the utility of each branch and solves a Nash social-welfare allocation.
+The resulting gate is adaptive, bounded, and closed-form, so it adds no trainable parameters and requires no optimization loop.
+The method also preserves compatibility with feature caching: a cached global candidate can be reused across steps, while the current local candidate still participates in the equilibrium allocation.
+
+\section{Method}
+
+\subsection{Coarse-to-Fine High-Resolution Inference}
+
+Given a prompt, the model first generates a base video at the native resolution of the pretrained backbone.
+The video is then upsampled in pixel space, encoded into latents, and perturbed with Gaussian noise following an SDEdit-style refinement step.
+High-resolution denoising begins from this noisy latent, preserving the base layout while allowing high-frequency details to be regenerated.
+
+\subsection{Local-Global Dual Branches}
+
+During high-resolution denoising, the latent is duplicated into two branches.
+The local branch uses inward sliding-window self-attention, keeping the receptive field of each query close to the native training scale.
+The global branch provides holistic context using full attention.
+This design gives the model access to both local detail and global semantic structure.
+
+Let the cross-attention outputs before output projection be
+\begin{equation}
+O_l(q), O_g(q) \in \mathbb{R}^{H \times D},
+\end{equation}
+where $q$ indexes a token, $l$ denotes the local branch, $g$ denotes the global branch, $H$ is the number of heads, and $D$ is the head dimension.
+
+\subsection{Branch Payoffs}
+
+Nash-CaSH measures the utility of each branch using two training-free signals: query compatibility and normalized response confidence.
+For branch $b \in \{l,g\}$, with query $Q_b(q)$ and cross-attention output $O_b(q)$, the payoff is
+\begin{equation}
+u_b(q) =
+\pi_b
+\left[
+\frac{1 + \cos(\mathrm{vec}(O_b(q)), \mathrm{vec}(Q_b(q)))}{2}
++
+\sigma\left(
+\frac{\mathrm{rms}(O_b(q))}{\mathrm{mean}_q\ \mathrm{rms}(O_b(q)) + \epsilon} - 1
+\right)
++
+\epsilon
+\right].
+\end{equation}
+The cosine term rewards outputs aligned with the current query.
+The response-confidence term rewards branch outputs that are strong relative to the layer's average response.
+The prior $\pi_b$ can encode a conservative preference for global semantic stability.
+The default values are $\pi_g=1.25$ and $\pi_l=1.0$.
+
+\subsection{Nash Equilibrium Gate}
+
+Let $a(q)$ be the semantic authority assigned to the global branch for token $q$; the local branch receives $1-a(q)$.
+Nash-CaSH solves
+\begin{equation}
+a^*(q)
+= \arg\max_{a \in [0,1]}
+u_g(q) \log(a + \epsilon)
++ u_l(q) \log(1-a + \epsilon).
+\end{equation}
+This objective has the closed-form ratio
+\begin{equation}
+r(q)
+=
+\frac{u_g(q)^{1/\tau}}
+{u_g(q)^{1/\tau} + u_l(q)^{1/\tau}},
+\end{equation}
+where $\tau$ is a temperature.
+To avoid unstable extremes in training-free inference, the ratio is mapped into a bounded interval:
+\begin{equation}
+a(q) = a_{min} + (a_{max} - a_{min}) r(q).
+\end{equation}
+The fused cross-attention output is
+\begin{equation}
+O_{Nash}(q)
+= a(q)O_g(q) + (1-a(q))O_l(q).
+\end{equation}
+The default interval is $a_{min}=0.65$, $a_{max}=0.98$.
+
+\subsection{Cached Nash-CaSH}
+
+Full global attention is expensive at high resolution.
+Nash-CaSH supports cached global cross-attention by refreshing the global candidate every $P$ denoising steps.
+For an intermediate step $t$, the fusion becomes
+\begin{equation}
+O_{Nash,t}(q)
+= a_t(q)O_{g,t'}(q) + (1-a_t(q))O_{l,t}(q),
+\end{equation}
+where $t'$ is the most recent refresh step.
+The local branch is still computed at the current step, so the gate can react to the current latent even when the global candidate is reused.
+
+\section{Experiments}
+
+The final submission should evaluate Nash-CaSH with fixed prompts, fixed seeds, official VBench metrics, and matched runtime conditions.
+The table below is a reporting template; Nash-CaSH numbers should be filled only after official evaluation runs finish.
+
+\begin{table}[t]
+\centering
+\caption{1080P evaluation template.}
+\begin{tabular}{lcccccccc}
+\hline
+Method & Subj. & Back. & Motion & Aesth. & Image & Cons. & Score & Time \\
+\hline
+Native high-resolution inference & TBD & TBD & TBD & TBD & TBD & TBD & TBD & TBD \\
+Fixed local-global override & TBD & TBD & TBD & TBD & TBD & TBD & TBD & TBD \\
+Nash-CaSH w/o cache & TBD & TBD & TBD & TBD & TBD & TBD & TBD & TBD \\
+Nash-CaSH w/ cache, P=2 & TBD & TBD & TBD & TBD & TBD & TBD & TBD & TBD \\
+\hline
+\end{tabular}
+\end{table}
+
+Required ablations include Nash gate disabled versus enabled, fixed override versus Nash-CaSH, bounds $a_{min}$ and $a_{max}$, branch priors, and cache interval $P$.
+
+\section{Conclusion}
+
+Nash-CaSH introduces a game-theoretic cross-attention harmonizer for training-free ultra-high-resolution video generation.
+By converting local-global branch fusion into a Nash social-welfare allocation, the method adaptively balances semantic consistency and local detail without training or extra model parameters.
+Its cache-compatible design keeps high-resolution inference practical.
+Final numerical claims should be made only after completing the official evaluation protocol with fixed seeds and reproducible settings.

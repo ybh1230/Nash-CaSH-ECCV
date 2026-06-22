@@ -1,0 +1,396 @@
+\pdfoutput=1
+\documentclass[10pt,twocolumn]{article}
+
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{times}
+\usepackage{microtype}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{multirow}
+\usepackage{array}
+\usepackage{enumitem}
+\usepackage{xcolor}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{hyperref}
+\usepackage{geometry}
+\usepackage{titlesec}
+
+\geometry{
+  paper=a4paper,
+  left=16mm,
+  right=16mm,
+  top=20mm,
+  bottom=24mm,
+  columnsep=7mm
+}
+
+\hypersetup{
+  colorlinks=true,
+  linkcolor=blue,
+  citecolor=blue,
+  urlcolor=blue
+}
+
+\titleformat{\section}{\large\bfseries}{\thesection.}{0.5em}{}
+\titleformat{\subsection}{\normalsize\bfseries}{\thesubsection.}{0.5em}{}
+\titleformat{\subsubsection}{\normalsize\itshape}{\thesubsubsection.}{0.5em}{}
+
+\setlength{\parindent}{1em}
+\setlength{\parskip}{0pt}
+\setlist[itemize]{leftmargin=1.2em,itemsep=1pt,topsep=2pt}
+\setlist[enumerate]{leftmargin=1.3em,itemsep=1pt,topsep=2pt}
+
+\newcommand{\method}{Nash-CaSH}
+\newcommand{\eg}{e.g.,}
+\newcommand{\ie}{i.e.,}
+\newcommand{\etal}{et al.}
+\newcommand{\placeholderfigure}[1]{
+  \begin{center}
+  \fbox{
+    \begin{minipage}[c][0.18\textheight][c]{0.92\linewidth}
+    \centering #1
+    \end{minipage}
+  }
+  \end{center}
+}
+
+\begin{document}
+
+\twocolumn[
+\begin{@twocolumnfalse}
+\begin{center}
+{\LARGE \bf \method: Game-Theoretic Cross-Attention Harmonization\\
+for Training-Free Ultra-High-Resolution Video Generation}
+
+\vspace{0.6em}
+{\large Anonymous ECCV Submission}
+
+\vspace{0.8em}
+\end{center}
+
+\begin{abstract}
+Generating ultra-high-resolution videos with pretrained video Diffusion Transformers is difficult because attention layers must operate far beyond the token scale observed during pretraining. Local window attention improves detail fidelity by preserving a native-scale receptive field, yet it can weaken global semantic coordination and create repeated structures. We propose \method, a training-free cross-attention harmonization strategy that treats local and global semantic evidence as two cooperative players in a Nash bargaining game. At each cross-attention layer, \method computes branch payoffs from query-output compatibility and response confidence, then derives a closed-form Nash social-welfare allocation to fuse the global branch and local branch. This adaptive equilibrium gate replaces fixed hand-tuned branch mixing and lets each token receive as much global semantic authority as it needs while retaining local detail when beneficial. \method is compatible with cached global cross-attention, enabling efficient high-resolution inference without model finetuning. The method is designed for 1080P, 3K, and 4K video synthesis and can be evaluated with standard video quality, alignment, and temporal consistency metrics.
+\end{abstract}
+
+\vspace{1.2em}
+\end{@twocolumnfalse}
+]
+
+\section{Introduction}
+
+Diffusion Transformers have become a powerful backbone for text-to-video generation. Their self-attention layers model rich spatiotemporal dependencies, but the same mechanism makes high-resolution generation expensive: the cost grows quadratically with the number of video tokens. A model pretrained at native resolution can often generate plausible low-resolution videos, yet direct high-resolution inference introduces a distribution shift in token count and receptive field. The generated videos frequently suffer from blurred details, distorted structures, or repeated objects.
+
+Training a dedicated high-resolution video generator is costly, so this paper studies a training-free alternative. The goal is to reuse a pretrained video generator at resolutions much larger than its native scale. This requires balancing two conflicting needs. On the one hand, each token should preserve a local receptive field close to the training scale, because this improves texture fidelity and reduces unseen attention extrapolation. On the other hand, the model still needs global semantic coordination across the entire frame and across time.
+
+Local attention and global attention provide complementary signals. A local branch preserves fine details and native-scale evidence, while a global branch provides holistic semantic layout. The key question is how these two branches should interact. A fixed mixing coefficient is too rigid: the preferred balance changes across denoising steps, layers, prompts, objects, and spatial positions. For example, a face texture may benefit from local evidence, while object count and scene layout require global evidence.
+
+We propose \method, a game-theoretic cross-attention harmonizer for training-free ultra-high-resolution video generation. \method treats local and global cross-attention outputs as two players bargaining for semantic authority. For every token, it computes positive payoffs from query-output compatibility and branch response confidence. It then solves a Nash social-welfare allocation in closed form. The resulting gate is adaptive, bounded, and training-free.
+
+\method has three appealing properties. First, it preserves global semantic guidance instead of relying on purely local attention. Second, it reintroduces local branch evidence whenever the local payoff is high, improving detail retention. Third, it remains compatible with cached global cross-attention: the expensive global candidate can be refreshed every few denoising steps, while the local candidate still participates in the current equilibrium allocation.
+
+Our contributions are summarized as follows:
+\begin{itemize}
+    \item We formulate local-global cross-attention fusion for high-resolution video generation as a Nash bargaining problem.
+    \item We propose a closed-form token-wise Nash equilibrium gate using branch payoffs from compatibility and response confidence.
+    \item We integrate the gate into both cached and non-cached training-free high-resolution inference.
+    \item We provide an ablation-ready experimental protocol for measuring quality, temporal consistency, text alignment, and runtime.
+\end{itemize}
+
+\section{Related Work}
+
+\subsection{Video Diffusion Transformers}
+
+Diffusion models have become a dominant paradigm for image and video generation. Recent video generators increasingly adopt Transformer-based denoisers because attention can capture long-range dependencies across space and time. However, the attention cost grows rapidly with token count. This makes direct ultra-high-resolution video generation difficult, especially when the model was pretrained only at a lower native resolution.
+
+\subsection{Training-Free High-Resolution Generation}
+
+Training-free high-resolution generation aims to extend pretrained generators to larger output sizes without finetuning. Common ideas include coarse-to-fine refinement, resolution-aware attention scaling, positional adjustment, and local receptive-field control. These methods are attractive because they avoid high-resolution training data and large compute budgets. In video generation, however, the temporal dimension makes resolution extrapolation harder than in still images.
+
+\subsection{Local and Global Attention}
+
+Local attention reduces compute and keeps the receptive field close to the native training scale. This often improves local detail, but purely local attention may cause repeated objects and weak global layout. Global attention provides holistic context, but it is expensive and can dilute high-frequency local evidence. \method is built around this local-global trade-off. Instead of selecting one branch or using a fixed mixture, it adaptively allocates branch influence for each token.
+
+\subsection{Nash Bargaining}
+
+Nash bargaining provides a principled way to allocate a shared resource between players with positive utilities. Maximizing Nash social welfare encourages a solution where each player receives influence proportional to its payoff. In this work, the shared resource is cross-attention semantic authority. The global branch and local branch bargain for how much they should contribute to the final token representation.
+
+\section{Method}
+
+\subsection{Problem Setup}
+
+Given a prompt $c$, a pretrained video diffusion model first generates a base video at its native resolution. The base video is upsampled to the target resolution, encoded into latent space, and perturbed with Gaussian noise following an SDEdit-style refinement process. High-resolution denoising then starts from this noisy latent.
+
+Let $z_t$ be the latent at denoising step $t$. The high-resolution denoiser contains self-attention layers and cross-attention layers. Self-attention controls spatiotemporal token interaction, while cross-attention injects semantic information from the text prompt. \method focuses on cross-attention because it is the direct pathway through which prompt semantics enter the denoising process.
+
+\subsection{Local-Global Dual Branches}
+
+During high-resolution refinement, the latent is duplicated into two branches. The local branch uses inward sliding-window self-attention, keeping each query token's receptive field near the native training scale. The global branch uses full attention to provide holistic context.
+
+At a cross-attention layer, let
+\begin{equation}
+    O_l(q), O_g(q) \in \mathbb{R}^{H \times D}
+\end{equation}
+denote the local and global branch cross-attention outputs for token $q$, before the output projection. Here $H$ is the number of heads and $D$ is the head dimension. Let $Q_l(q)$ and $Q_g(q)$ be the corresponding query features.
+
+\subsection{Branch Payoff}
+
+\method assigns a positive payoff to each branch. The payoff should be high when the branch output is compatible with the current query and when the branch produces a confident response. For branch $b \in \{l,g\}$, we define
+\begin{equation}
+\begin{split}
+u_b(q) = \pi_b \Bigg[
+&\frac{1 + \cos(\mathrm{vec}(O_b(q)), \mathrm{vec}(Q_b(q)))}{2} \\
+&+ \sigma \left(
+\frac{\mathrm{rms}(O_b(q))}
+{\mathrm{mean}_{q'}\mathrm{rms}(O_b(q')) + \epsilon}
+- 1
+\right)
++ \epsilon
+\Bigg],
+\end{split}
+\label{eq:payoff}
+\end{equation}
+where $\pi_b$ is a branch prior, $\sigma(\cdot)$ is the sigmoid function, and $\epsilon$ is a small constant. The cosine term measures query-output compatibility. The normalized RMS term measures response confidence relative to the layer average. By default, we set $\pi_g=1.25$ and $\pi_l=1.0$, giving a conservative prior to global semantic stability while still permitting local evidence to influence the output.
+
+\subsection{Nash Equilibrium Gate}
+
+Let $a(q)$ be the semantic authority assigned to the global branch for token $q$. The local branch receives $1-a(q)$. We solve the following Nash social-welfare problem:
+\begin{equation}
+a^*(q) =
+\arg\max_{a \in [0,1]}
+u_g(q)\log(a+\epsilon)
++ u_l(q)\log(1-a+\epsilon).
+\label{eq:nash_objective}
+\end{equation}
+
+The closed-form ratio is
+\begin{equation}
+r(q) =
+\frac{u_g(q)^{1/\tau}}
+{u_g(q)^{1/\tau} + u_l(q)^{1/\tau}},
+\label{eq:nash_ratio}
+\end{equation}
+where $\tau$ is a temperature controlling the sharpness of the allocation.
+
+Training-free inference can be sensitive to extreme gates, so we map the ratio into a bounded interval:
+\begin{equation}
+a(q) = a_{\min} + (a_{\max} - a_{\min})r(q).
+\label{eq:bounded_gate}
+\end{equation}
+We use $a_{\min}=0.65$ and $a_{\max}=0.98$ by default. The final cross-attention output is
+\begin{equation}
+O_{\mathrm{Nash}}(q)
+= a(q)O_g(q) + (1-a(q))O_l(q).
+\label{eq:fusion}
+\end{equation}
+
+This gate never fully removes global semantic guidance, but it can recover local detail whenever the local payoff is strong. The entire computation is parameter-free and differentiability is not required because the method is used at inference time.
+
+\subsection{Cache-Compatible Inference}
+
+Global branch computation is expensive at high resolution. \method therefore supports cached global cross-attention. Let $t'$ be the latest step where the global candidate is refreshed. At an intermediate step $t$, the fusion becomes
+\begin{equation}
+O_{\mathrm{Nash},t}(q)
+= a_t(q)O_{g,t'}(q) + (1-a_t(q))O_{l,t}(q).
+\label{eq:cached}
+\end{equation}
+The global candidate is reused, but the local branch is still computed at the current latent state. This allows the Nash gate to react to the current denoising dynamics while retaining most of the acceleration from caching.
+
+\subsection{Algorithm}
+
+\begin{figure}[t]
+\placeholderfigure{Overview placeholder: base video generation, high-resolution latent refinement, local-global branches, Nash gate, and cached global candidate. Replace with the final method figure.}
+\caption{Overview of \method. A local branch preserves native-scale detail, while a global branch provides holistic context. The Nash gate fuses their cross-attention outputs with token-wise equilibrium weights.}
+\label{fig:overview}
+\end{figure}
+
+\begin{enumerate}
+    \item Generate a base video at native resolution from prompt $c$.
+    \item Upsample the base video to the target resolution and encode it into latent space.
+    \item Add Gaussian noise with strength $s$.
+    \item For each denoising step, compute local branch features and global branch features.
+    \item At cross-attention layers, compute branch payoffs using Eq.~\eqref{eq:payoff}.
+    \item Compute the Nash gate using Eq.~\eqref{eq:nash_ratio} and Eq.~\eqref{eq:bounded_gate}.
+    \item Fuse branch outputs using Eq.~\eqref{eq:fusion}; in cache mode, use Eq.~\eqref{eq:cached}.
+\end{enumerate}
+
+\section{Experiments}
+
+\subsection{Experimental Setup}
+
+The final evaluation should use a fixed prompt set, fixed random seeds, and official video generation metrics. Unless otherwise specified, the recommended setting is:
+\begin{itemize}
+    \item Backbone: pretrained video Diffusion Transformer.
+    \item Resolution: $1920 \times 1088$ for 1080P; $3380 \times 1920$ for 3K.
+    \item Denoising steps: 50.
+    \item SDEdit strength: 0.7.
+    \item Guidance scale: 5.0.
+    \item Cache interval: $P=2$ by default.
+\end{itemize}
+
+Metrics should include subject consistency, background consistency, motion smoothness, aesthetic quality, imaging quality, overall consistency, overall score, and inference time. Each method should be evaluated with the same prompts, seeds, model weights, precision, and hardware.
+
+\subsection{Main Comparison}
+
+\begin{table*}[t]
+\centering
+\caption{Main 1080P evaluation template. Values should be filled only after running the official evaluation protocol. Higher is better for all quality metrics; lower is better for inference time.}
+\label{tab:main}
+\begin{tabular}{lcccccccc}
+\toprule
+Method & Subject & Background & Motion & Aesthetic & Imaging & Overall Cons. & Overall Score & Time \\
+\midrule
+Native high-resolution inference & TBD & TBD & TBD & TBD & TBD & TBD & TBD & TBD \\
+Local-window only & TBD & TBD & TBD & TBD & TBD & TBD & TBD & TBD \\
+Fixed local-global override & TBD & TBD & TBD & TBD & TBD & TBD & TBD & TBD \\
+\method\ w/o cache & TBD & TBD & TBD & TBD & TBD & TBD & TBD & TBD \\
+\method\ w/ cache, $P=2$ & TBD & TBD & TBD & TBD & TBD & TBD & TBD & TBD \\
+\method\ w/ cache, $P=5$ & TBD & TBD & TBD & TBD & TBD & TBD & TBD & TBD \\
+\bottomrule
+\end{tabular}
+\end{table*}
+
+The main comparison should verify whether adaptive Nash fusion improves the quality-efficiency trade-off over fixed local-global mixing. The most important metrics are aesthetic quality, imaging quality, overall consistency, and total runtime.
+
+\subsection{Ablation Study}
+
+\begin{table}[t]
+\centering
+\caption{Ablation template for Nash gate design.}
+\label{tab:ablation}
+\begin{tabular}{lccc}
+\toprule
+Variant & Aesthetic & Imaging & Score \\
+\midrule
+No Nash gate & TBD & TBD & TBD \\
+$a_{\min}=0.55$ & TBD & TBD & TBD \\
+$a_{\min}=0.65$ & TBD & TBD & TBD \\
+$a_{\min}=0.75$ & TBD & TBD & TBD \\
+$a_{\max}=0.90$ & TBD & TBD & TBD \\
+$a_{\max}=0.98$ & TBD & TBD & TBD \\
+$\pi_g=1.00$ & TBD & TBD & TBD \\
+$\pi_g=1.25$ & TBD & TBD & TBD \\
+$\pi_g=1.50$ & TBD & TBD & TBD \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The ablation should test the contribution of the Nash objective, the bounded gate, branch priors, and cache interval. It should also include qualitative examples where local-only inference repeats objects and global-only inference loses detail.
+
+\subsection{Qualitative Results}
+
+\begin{figure*}[t]
+\placeholderfigure{Qualitative comparison placeholder: native inference, local-only, fixed override, and \method. Replace with generated frames after experiments.}
+\caption{Qualitative comparison template. The final figure should show repeated-object cases, fine texture cases, and prompts requiring long-range layout consistency.}
+\label{fig:qualitative}
+\end{figure*}
+
+The qualitative analysis should focus on four aspects: object count, global layout, local texture, and temporal stability. \method is expected to be most beneficial when a scene contains both fine details and long-range structure, such as close-up faces, animals in complex environments, vehicles in large urban scenes, and camera motion over dense backgrounds.
+
+\subsection{Runtime Analysis}
+
+\begin{table}[t]
+\centering
+\caption{Runtime template for cache interval analysis.}
+\label{tab:runtime}
+\begin{tabular}{lcc}
+\toprule
+Variant & Runtime & Speedup \\
+\midrule
+\method\ w/o cache & TBD & 1.0$\times$ \\
+\method\ cache, $P=2$ & TBD & TBD \\
+\method\ cache, $P=5$ & TBD & TBD \\
+\method\ cache, $P=8$ & TBD & TBD \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The cache interval controls the trade-off between semantic freshness and speed. A small interval provides stronger global guidance, while a larger interval reduces computation. The final paper should report both quality and runtime for each interval.
+
+\section{Discussion}
+
+\method is a training-free method, so its gains depend on the quality of branch payoffs. The proposed payoff combines compatibility and confidence, but other signals may be useful, such as attention entropy, prompt-token saliency, or temporal consistency. The bounded gate is also important: unconstrained Nash allocation may produce extreme values when one payoff dominates. The bounds keep the method stable under high-resolution extrapolation.
+
+The method is intended to complement, rather than replace, strong pretrained generators. It does not require retraining, new video datasets, or additional supervision. Its main cost is the extra branch computation and cross-attention fusion. Cache-compatible inference reduces this overhead.
+
+\section{Conclusion}
+
+We presented \method, a game-theoretic cross-attention harmonization method for training-free ultra-high-resolution video generation. By treating local and global branches as cooperative players in a Nash bargaining game, \method computes token-wise equilibrium gates that adaptively balance semantic consistency and local detail. The method is parameter-free, cache-compatible, and designed for practical 1080P, 3K, and 4K video synthesis. Future work includes learning stronger payoff functions, extending the gate to temporal consistency objectives, and integrating the method with additional video backbones.
+
+\begin{thebibliography}{99}
+
+\bibitem{vaswani2017attention}
+A. Vaswani, N. Shazeer, N. Parmar, J. Uszkoreit, L. Jones, A. N. Gomez, L. Kaiser, and I. Polosukhin.
+Attention is all you need.
+In \emph{NeurIPS}, 2017.
+
+\bibitem{ho2020ddpm}
+J. Ho, A. Jain, and P. Abbeel.
+Denoising diffusion probabilistic models.
+In \emph{NeurIPS}, 2020.
+
+\bibitem{rombach2022ldm}
+R. Rombach, A. Blattmann, D. Lorenz, P. Esser, and B. Ommer.
+High-resolution image synthesis with latent diffusion models.
+In \emph{CVPR}, 2022.
+
+\bibitem{peebles2023dit}
+W. Peebles and S. Xie.
+Scalable diffusion models with Transformers.
+In \emph{ICCV}, 2023.
+
+\bibitem{meng2021sdedit}
+C. Meng, Y. He, Y. Song, J. Song, J. Wu, J. Zhu, and S. Ermon.
+SDEdit: Guided image synthesis and editing with stochastic differential equations.
+In \emph{ICLR}, 2022.
+
+\bibitem{liu2021swin}
+Z. Liu, Y. Lin, Y. Cao, H. Hu, Y. Wei, Z. Zhang, S. Lin, and B. Guo.
+Swin Transformer: Hierarchical vision Transformer using shifted windows.
+In \emph{ICCV}, 2021.
+
+\bibitem{hassani2023nat}
+A. Hassani and H. Shi.
+Neighborhood attention Transformer.
+In \emph{CVPR}, 2023.
+
+\bibitem{ho2022cfg}
+J. Ho and T. Salimans.
+Classifier-free diffusion guidance.
+In \emph{NeurIPS Workshop}, 2021.
+
+\bibitem{huang2024vbench}
+Z. Huang, Y. He, J. Yu, F. Zhang, C. Si, Y. Jiang, Y. Zhang, T. Wu, Q. Jin, N. Chanpaisit, Y. Wang, X. Chen, L. Wang, D. Lin, Y. Qiao, and Z. Liu.
+VBench: Comprehensive benchmark suite for video generative models.
+In \emph{CVPR}, 2024.
+
+\bibitem{nash1950bargaining}
+J. Nash.
+The bargaining problem.
+\emph{Econometrica}, 18(2):155--162, 1950.
+
+\bibitem{nash1951noncooperative}
+J. Nash.
+Non-cooperative games.
+\emph{Annals of Mathematics}, 54(2):286--295, 1951.
+
+\bibitem{dao2022flashattention}
+T. Dao, D. Fu, S. Ermon, A. Rudra, and C. Re.
+FlashAttention: Fast and memory-efficient exact attention with IO-awareness.
+In \emph{NeurIPS}, 2022.
+
+\bibitem{bolya2023tome}
+D. Bolya and J. Hoffman.
+Token merging for fast stable diffusion.
+In \emph{CVPR Workshop}, 2023.
+
+\bibitem{ma2024deepcache}
+X. Ma, G. Fang, and X. Wang.
+DeepCache: Accelerating diffusion models for free.
+In \emph{CVPR}, 2024.
+
+\end{thebibliography}
+
+\end{document}
