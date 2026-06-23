@@ -20,7 +20,10 @@ parser.add_argument('--flow_shift', type=float, default=9.0, help="Flow-shift va
 parser.add_argument('--cache_steps', type=int, default=2, help="Refresh interval for cached full-branch cross-attention")
 parser.add_argument('--output', type=str, default='Nash_CaSH_Old_man.mp4', help="Output video path")
 parser.add_argument('--prompt', type=str, default="A realistic close-up of an elderly man with gray hair and a thick gray beard, wearing a light-colored shirt. His head is slightly lowered. The camera zooms from full body to close-up, highlighting detailed facial wrinkles, skin texture, forehead lines, eye bags, and beard strands. High resolution, cinematic lighting, sharp details.", help="Text prompt")
+parser.add_argument('--prompt_file', type=str, default=None, help="Optional text file containing the prompt")
 parser.add_argument('--negative_prompt', type=str, default="repeating patterns, Blurry face, low detail, distorted features, extra limbs, cartoon style, smooth plastic skin, low resolution, flat colors, lack of texture", help="Negative prompt")
+parser.add_argument('--negative_prompt_file', type=str, default=None, help="Optional text file containing the negative prompt")
+parser.add_argument('--seed', type=int, default=None, help="Random seed for reproducible visual comparisons")
 parser.add_argument('--nash_cash', action=argparse.BooleanOptionalAction, default=True, help="Enable Nash-CaSH cross-attention bargaining")
 parser.add_argument('--nash_floor', type=float, default=0.65, help="Minimum full-branch share in Nash-CaSH")
 parser.add_argument('--nash_ceiling', type=float, default=0.98, help="Maximum full-branch share in Nash-CaSH")
@@ -54,8 +57,16 @@ base_height = args.base_height
 base_width = args.base_width
 # If you want to use the 14B models, please remember to change the base_width to 1280, and base_height to 720.
 
-prompt = args.prompt
-negative_prompt = args.negative_prompt
+prompt = open(args.prompt_file, "r", encoding="utf-8").read().strip() if args.prompt_file else args.prompt
+negative_prompt = (
+    open(args.negative_prompt_file, "r", encoding="utf-8").read().strip()
+    if args.negative_prompt_file
+    else args.negative_prompt
+)
+generator = None
+if args.seed is not None:
+    generator_device = "cuda" if torch.cuda.is_available() else "cpu"
+    generator = torch.Generator(device=generator_device).manual_seed(args.seed)
 
 output = pipe_t2v(
     prompt=prompt,
@@ -63,7 +74,8 @@ output = pipe_t2v(
     height=base_height,
     width=base_width,
     num_frames=num_frames,
-    guidance_scale=args.guidance_scale
+    guidance_scale=args.guidance_scale,
+    generator=generator,
 ).frames[0]
 
 # You can export the base video to compare native and high-resolution refinement.
@@ -122,6 +134,7 @@ pipe_kwargs = dict(
     width=args.target_width,
     guidance_scale=args.guidance_scale,
     strength=args.strength,
+    generator=generator,
 )
 if args.mode == 'cache':
     pipe_kwargs["cache_steps"] = args.cache_steps

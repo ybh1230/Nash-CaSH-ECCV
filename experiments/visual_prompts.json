@@ -1,0 +1,50 @@
+[
+  {
+    "id": "fig2_elderly_closeup",
+    "source": "Figure 2",
+    "focus": "face texture, beard strands, zoom-in consistency",
+    "prompt": "A realistic close-up of an elderly man with gray hair and a thick gray beard, wearing a light-colored shirt. His head is slightly lowered. The camera zooms from full body to close-up, highlighting detailed facial wrinkles, skin texture, forehead lines, eye bags, and beard strands. High resolution, cinematic lighting, sharp details."
+  },
+  {
+    "id": "fig5_armored_wolf",
+    "source": "Figure 5",
+    "focus": "object identity, armor detail, animal motion",
+    "prompt": "A majestic wolf standing proudly in a forest clearing, wearing intricately designed armor that gleams in the sunlight. The wolf moves slightly, its tail swishing gently and its ears flicking as it watches its surroundings. The armor is made of dark, polished metal with gold accents, and its design reflects the wolf's fierce and noble nature. The forest around the wolf is dense, with tall trees and soft beams of sunlight breaking through the canopy, casting shadows on the ground. The atmosphere is heroic and powerful, 8K."
+  },
+  {
+    "id": "fig10_ancient_library",
+    "source": "Figure 10",
+    "focus": "long-range layout, warm lighting, repeated structures",
+    "prompt": "A warm and atmospheric scene inside an ancient library illuminated only by flickering candlelight. Towering bookshelves filled with weathered tomes stretch into the shadows, while dust particles drift gently in the golden glow. A single wooden desk sits in the center, its polished surface reflecting the soft light from a tall candle, casting long, dancing shadows on the surrounding stone walls. The rich textures of leather-bound books, carved wood, and aged parchment create a sense of timeless wisdom. High-resolution 8k quality, ultra-detailed textures, and warm, natural lighting emphasize the quiet, scholarly mood of the setting."
+  },
+  {
+    "id": "fig10_cherry_blossom_river",
+    "source": "Figure 10",
+    "focus": "background consistency, small moving petals, water reflections",
+    "prompt": "A gentle riverside scene where cherry blossom petals drift softly across the water in the spring breeze. The branches above are full of pink blossoms, some catching warm sunlight, others swaying gently in the wind. The river's surface ripples delicately, reflecting the soft pastel sky. Smooth stones along the bank are partially covered by fallen petals, adding to the tranquil atmosphere. High-resolution 8k quality, detailed natural textures, and soft warm lighting emphasize the peaceful and poetic beauty of the scene."
+  },
+  {
+    "id": "fig10_desert_caravan",
+    "source": "Figure 10",
+    "focus": "global layout, small subjects, motion smoothness",
+    "prompt": "A sweeping view of a desert caravan at sunset, with camels walking slowly across golden dunes painted by the warm glow of the dying sun. Silhouettes of distant travelers appear against the horizon, their robes catching subtle highlights from the orange sky. Soft sands ripple underfoot, with intricate textures shaped by the wind. The sky transitions from fiery gold to soft purples, with thin clouds drifting lazily overhead. High-resolution 8k quality, dynamic lighting, and ultra-detailed textures capture the elegance and quiet determination of the desert travelers."
+  },
+  {
+    "id": "fig10_hummingbird",
+    "source": "Figure 10",
+    "focus": "small subject stability, fine feathers, wing motion",
+    "prompt": "A serene close-up of a brightly colored hummingbird hovering near a simple flower, its iridescent feathers shimmering in the sunlight. The background is a smooth gradient of soft blues and greens, with a slight bokeh effect to keep the focus on the bird. The flower, with its delicate petals, stands still in the gentle breeze, with dewdrops glistening on the petals and the bird's wings. The composition highlights the beauty of nature in a minimalist setting. High-resolution 8k quality, highly detailed textures, and soft, natural lighting enhance the beauty and grace of the scene."
+  },
+  {
+    "id": "fig10_glowing_jellyfish",
+    "source": "Figure 10",
+    "focus": "translucent structure, dark background, temporal stability",
+    "prompt": "A glowing jellyfish floating through the dark ocean depths, its bioluminescent tentacles trailing behind it. The soft, otherworldly light from the jellyfish illuminates the surrounding water, revealing a distant underwater landscape of smooth rocks and drifting seaweed. High-resolution 8k quality, ultra-detailed textures, and natural lighting capture the serene, mysterious beauty of the deep ocean."
+  },
+  {
+    "id": "fig10_rainy_motorcycle",
+    "source": "Figure 10",
+    "focus": "specular reflections, wet street detail, geometric stability",
+    "prompt": "A sleek black motorcycle parked on a quiet, rain-drenched street at night, its chrome parts reflecting the neon glow from nearby signs. The road is wet, with puddles reflecting the vibrant lights of the city around it. The motorcycle's design is sharp and modern, with every curve and detail sharply defined against the glossy street. In the background, the soft blur of city lights creates a moody and cinematic atmosphere. High-resolution 8k quality, sharp details, and atmospheric lighting enhance the futuristic yet grounded vibe of the scene."
+  }
+]

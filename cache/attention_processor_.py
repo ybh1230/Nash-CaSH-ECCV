@@ -13,6 +13,12 @@ create_block_mask = torch.compile(create_block_mask)
 
 BLOCK_MASK = None
 BLOCK_MASK_ = None
+FLEX_KERNEL_OPTIONS = {
+    "BLOCK_M": 32,
+    "BLOCK_N": 64,
+    "num_warps": 4,
+    "num_stages": 2,
+}
 
 
 # Inward sliding window mask
@@ -91,7 +97,11 @@ class WanFlexAttnProcessor_:
                 "WanAttnProcessor requires PyTorch 2.0. To use it, please upgrade PyTorch to version 2.0 or higher."
             )
         assert BLOCK_MASK is not None
-        self.flex_attn = partial(flex_attention, block_mask=BLOCK_MASK)
+        self.flex_attn = partial(
+            flex_attention,
+            block_mask=BLOCK_MASK,
+            kernel_options=FLEX_KERNEL_OPTIONS,
+        )
         self.flex_attn = torch.compile(self.flex_attn, dynamic=False)
 
     def __call__(

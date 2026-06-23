@@ -5,7 +5,7 @@
 \usepackage[T1]{fontenc}
 \usepackage{times}
 \usepackage{microtype}
-\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{amsmath,amssymb,amsfonts,amsthm}
 \usepackage{graphicx}
 \usepackage{booktabs}
 \usepackage{multirow}
@@ -43,10 +43,12 @@
 \setlist[itemize]{leftmargin=1.2em,itemsep=1pt,topsep=2pt}
 \setlist[enumerate]{leftmargin=1.3em,itemsep=1pt,topsep=2pt}
 
+\newtheorem{proposition}{Proposition}
 \newcommand{\method}{Nash-CaSH}
 \newcommand{\eg}{e.g.,}
 \newcommand{\ie}{i.e.,}
 \newcommand{\etal}{et al.}
+\newcommand{\TBD}{--}
 \newcommand{\placeholderfigure}[1]{
   \begin{center}
   \fbox{
@@ -62,8 +64,8 @@
 \twocolumn[
 \begin{@twocolumnfalse}
 \begin{center}
-{\LARGE \bf \method: Game-Theoretic Cross-Attention Harmonization\\
-for Training-Free Ultra-High-Resolution Video Generation}
+{\LARGE \bf \method: A Nash Bargaining Principle for Semantic Authority\\
+in Training-Free Ultra-High-Resolution Video Generation}
 
 \vspace{0.6em}
 {\large Anonymous ECCV Submission}
@@ -72,7 +74,7 @@ for Training-Free Ultra-High-Resolution Video Generation}
 \end{center}
 
 \begin{abstract}
-Generating ultra-high-resolution videos with pretrained video Diffusion Transformers is difficult because attention layers must operate far beyond the token scale observed during pretraining. Local window attention improves detail fidelity by preserving a native-scale receptive field, yet it can weaken global semantic coordination and create repeated structures. We propose \method, a training-free cross-attention harmonization strategy that treats local and global semantic evidence as two cooperative players in a Nash bargaining game. At each cross-attention layer, \method computes branch payoffs from query-output compatibility and response confidence, then derives a closed-form Nash social-welfare allocation to fuse the global branch and local branch. This adaptive equilibrium gate replaces fixed hand-tuned branch mixing and lets each token receive as much global semantic authority as it needs while retaining local detail when beneficial. \method is compatible with cached global cross-attention, enabling efficient high-resolution inference without model finetuning. The method is designed for 1080P, 3K, and 4K video synthesis and can be evaluated with standard video quality, alignment, and temporal consistency metrics.
+Training-free ultra-high-resolution video generation asks a pretrained video diffusion model to denoise far more spatial tokens than it observes during pretraining. The fundamental issue is not only computational: high-resolution inference creates a conflict between holistic semantic consistency and native-scale visual faithfulness. Existing inference rules usually treat this conflict as an engineering choice, selecting a fixed attention rule or a fixed mixture. We instead treat it as a Nash bargaining problem. In \method, two semantic agents participate in a cooperative game: a holistic agent that represents scene-level prompt authority and a native-scale agent that represents detail-preserving evidence. Their utilities are observed from the current attention state through alignment and confidence signals. The final cross-attention representation is obtained by solving a Nash bargaining objective over a shared unit of semantic authority. This gives a closed-form equilibrium allocation that is adaptive, interpretable, and bounded for stable diffusion inference. Under this view, full attention, window attention, caching, and output composition are implementation mechanisms; the core contribution is the Nash principle that decides how semantic authority should be negotiated at each token, layer, and denoising step. The method is parameter-free, requires no finetuning, and provides a principled route to balance holistic semantic reliability with high-resolution visual fidelity.
 \end{abstract}
 
 \vspace{1.2em}
@@ -81,243 +83,370 @@ Generating ultra-high-resolution videos with pretrained video Diffusion Transfor
 
 \section{Introduction}
 
-Diffusion Transformers have become a powerful backbone for text-to-video generation. Their self-attention layers model rich spatiotemporal dependencies, but the same mechanism makes high-resolution generation expensive: the cost grows quadratically with the number of video tokens. A model pretrained at native resolution can often generate plausible low-resolution videos, yet direct high-resolution inference introduces a distribution shift in token count and receptive field. The generated videos frequently suffer from blurred details, distorted structures, or repeated objects.
+Diffusion Transformers have rapidly become a strong backbone for video generation because attention can coordinate appearance, motion, and prompt semantics over space and time. However, the same attention mechanism becomes a bottleneck when a pretrained model is used for ultra-high-resolution synthesis. If the target video has many more spatial tokens than the native training resolution, full attention becomes expensive, and the denoiser is forced to operate outside the token distribution seen during pretraining. In practice, direct high-resolution inference often produces blurred local structures, repeated objects, distorted faces, and unstable fine textures.
 
-Training a dedicated high-resolution video generator is costly, so this paper studies a training-free alternative. The goal is to reuse a pretrained video generator at resolutions much larger than its native scale. This requires balancing two conflicting needs. On the one hand, each token should preserve a local receptive field close to the training scale, because this improves texture fidelity and reduces unseen attention extrapolation. On the other hand, the model still needs global semantic coordination across the entire frame and across time.
+A common training-free strategy is to keep the effective receptive field close to the native training scale. This preserves local fidelity and reduces resolution extrapolation pressure. Yet text-to-video generation also requires scene-level semantic authority. A prompt such as ``a man walking through a crowded city street'' or ``a red car passing a glass building'' is not only a collection of local patches; it contains constraints on object identity, layout, background continuity, and motion. When inference gives too much authority to native-scale evidence, visually plausible details may become semantically fragmented. When inference gives too much authority to holistic evidence, the result may be semantically stable but locally over-smoothed.
 
-Local attention and global attention provide complementary signals. A local branch preserves fine details and native-scale evidence, while a global branch provides holistic semantic layout. The key question is how these two branches should interact. A fixed mixing coefficient is too rigid: the preferred balance changes across denoising steps, layers, prompts, objects, and spatial positions. For example, a face texture may benefit from local evidence, while object count and scene layout require global evidence.
+This tension is usually described in implementation terms, such as local attention versus full attention. We take a different view. We regard high-resolution refinement as a semantic bargaining process between two rational sources of evidence. The first is a holistic semantic agent, which protects prompt-level consistency, object count, and long-range layout. The second is a native-scale evidence agent, which protects texture, boundaries, and high-frequency detail under the model's native receptive-field prior. These agents are not new networks; they are conceptual players instantiated by different attention computations. The important question is therefore not ``which attention path should be used'', but ``how should semantic authority be negotiated''.
 
-We propose \method, a game-theoretic cross-attention harmonizer for training-free ultra-high-resolution video generation. \method treats local and global cross-attention outputs as two players bargaining for semantic authority. For every token, it computes positive payoffs from query-output compatibility and branch response confidence. It then solves a Nash social-welfare allocation in closed form. The resulting gate is adaptive, bounded, and training-free.
+Fixed rules are unsatisfactory from this perspective. A constant coefficient implicitly assumes the same bargaining outcome for all tokens, layers, denoising steps, and prompts. It also has no rationality principle: it does not state what each agent wants, what resource is being allocated, or why the resulting allocation should be stable. In early denoising, the holistic agent may deserve more authority because global structure is still forming. In later denoising, the native-scale agent may deserve more authority because texture and boundary evidence become reliable. Within a single frame, a face, a wall, and a moving object boundary may all require different bargaining outcomes.
 
-\method has three appealing properties. First, it preserves global semantic guidance instead of relying on purely local attention. Second, it reintroduces local branch evidence whenever the local payoff is high, improving detail retention. Third, it remains compatible with cached global cross-attention: the expensive global candidate can be refreshed every few denoising steps, while the local candidate still participates in the current equilibrium allocation.
+We propose \method, a Nash bargaining principle for semantic authority allocation. The shared resource is one unit of cross-attention authority at a token. The two semantic agents have utilities observed from the current attention state. A utility is high when the agent's response is both compatible with the token's query and confident relative to the layer context. \method then chooses the semantic authority allocation that maximizes Nash social welfare. This changes the role of the attention rule: full attention, window attention, and caching are implementation pathways for constructing the agents, while Nash bargaining is the decision principle that governs their interaction.
 
-Our contributions are summarized as follows:
+For every cross-attention token, \method solves a constrained game objective:
+\begin{equation}
+    \max_{\alpha \in (0,1)}
+    u_h \log \alpha + u_n \log(1-\alpha),
+\end{equation}
+where $u_h$ and $u_n$ are the utilities of the holistic semantic agent and the native-scale evidence agent. The closed-form solution is a Nash equilibrium allocation: each agent receives semantic authority proportional to its utility, and a bounded interval is used to keep training-free diffusion inference stable.
+
+The resulting method has three important properties. First, it makes the high-resolution inference rule interpretable through Nash concepts: players, utilities, feasible allocation, and equilibrium. Second, it avoids treating local detail recovery and semantic preservation as hand-tuned engineering knobs. Third, it remains practical: the holistic agent can be instantiated with cached full attention, while the native-scale agent can be instantiated with efficient window attention.
+
+Our contributions are:
 \begin{itemize}
-    \item We formulate local-global cross-attention fusion for high-resolution video generation as a Nash bargaining problem.
-    \item We propose a closed-form token-wise Nash equilibrium gate using branch payoffs from compatibility and response confidence.
-    \item We integrate the gate into both cached and non-cached training-free high-resolution inference.
-    \item We provide an ablation-ready experimental protocol for measuring quality, temporal consistency, text alignment, and runtime.
+    \item We formulate training-free high-resolution video refinement as a Nash semantic bargaining problem, where holistic and native-scale semantic agents negotiate a shared unit of cross-attention authority.
+    \item We construct inference-time utility functions from attention tensors, so the Nash utilities are grounded in query-response alignment and confidence rather than introduced as arbitrary weights.
+    \item We derive a closed-form token-wise Nash bargaining solution and instantiate it as a stable equilibrium rule for cached and non-cached high-resolution refinement.
+    \item We provide an evaluation protocol and ablation design for verifying the necessity of the Nash objective, utility construction, equilibrium bounds, and cache-compatible semantic play.
 \end{itemize}
 
 \section{Related Work}
 
 \subsection{Video Diffusion Transformers}
 
-Diffusion models have become a dominant paradigm for image and video generation. Recent video generators increasingly adopt Transformer-based denoisers because attention can capture long-range dependencies across space and time. However, the attention cost grows rapidly with token count. This makes direct ultra-high-resolution video generation difficult, especially when the model was pretrained only at a lower native resolution.
+Diffusion models have become a central framework for image and video generation \cite{ho2020ddpm,rombach2022ldm}. Transformer denoisers further improve scalability and modeling capacity by replacing convolutional inductive bias with attention-based token interaction \cite{vaswani2017attention,peebles2023dit}. For video generation, attention is especially important because visual quality depends on both spatial appearance and temporal consistency. The challenge is that the number of tokens grows quickly with resolution and frame count. A model trained at moderate resolution may not generalize cleanly to much larger token grids without additional mechanisms.
 
 \subsection{Training-Free High-Resolution Generation}
 
-Training-free high-resolution generation aims to extend pretrained generators to larger output sizes without finetuning. Common ideas include coarse-to-fine refinement, resolution-aware attention scaling, positional adjustment, and local receptive-field control. These methods are attractive because they avoid high-resolution training data and large compute budgets. In video generation, however, the temporal dimension makes resolution extrapolation harder than in still images.
+Training-free high-resolution generation reuses pretrained generative models without collecting new high-resolution video data or finetuning large backbones. Typical strategies include coarse-to-fine refinement, latent upsampling, local receptive-field control, attention caching, and token reuse. These approaches are attractive because they reduce compute and data requirements. However, training-free methods must operate under a delicate constraint: they modify inference behavior without learning new model parameters. This makes the design of deterministic inference-time rules crucial.
 
-\subsection{Local and Global Attention}
+\subsection{Semantic Evidence Sources in High-Resolution Inference}
 
-Local attention reduces compute and keeps the receptive field close to the native training scale. This often improves local detail, but purely local attention may cause repeated objects and weak global layout. Global attention provides holistic context, but it is expensive and can dilute high-frequency local evidence. \method is built around this local-global trade-off. Instead of selecting one branch or using a fixed mixture, it adaptively allocates branch influence for each token.
+Local attention has been widely used to reduce attention cost and improve locality \cite{liu2021swin,hassani2023nat}. In high-resolution generative inference, locality also helps maintain a token neighborhood close to the training distribution. However, text-to-video generation cannot be reduced to local synthesis. A video must satisfy prompt-level semantics, object count, background continuity, and temporal motion. These requirements create two distinct semantic evidence sources: holistic evidence for global meaning and native-scale evidence for detailed fidelity. \method does not claim that either source is universally better. It provides a Nash principle for deciding how much authority each source receives at the current token.
 
-\subsection{Nash Bargaining}
+\subsection{Caching for Efficient Diffusion}
 
-Nash bargaining provides a principled way to allocate a shared resource between players with positive utilities. Maximizing Nash social welfare encourages a solution where each player receives influence proportional to its payoff. In this work, the shared resource is cross-attention semantic authority. The global branch and local branch bargain for how much they should contribute to the final token representation.
+Caching reduces repeated computation in iterative diffusion sampling \cite{ma2024deepcache,bolya2023tome}. In high-resolution video refinement, cached holistic evidence is particularly useful because full attention is expensive. But caching also introduces stale information: the cached semantic response may not perfectly match the current latent state. \method addresses this by treating cached evidence as a participant in the same Nash game. If the cached response remains useful, it receives high utility; if the current native-scale response is stronger, the equilibrium shifts authority away from the stale participant.
+
+\subsection{Nash Bargaining and Equilibrium Allocation}
+
+Nash bargaining provides an axiomatic solution for allocating a shared resource between players with positive utilities \cite{nash1950bargaining}. Maximizing the Nash product balances efficiency and fairness: a player with high utility receives more resource, but the solution discourages collapsing all resource to one side unless the other side has negligible utility. This property matches semantic authority allocation in high-resolution video generation. The inference process should favor the stronger evidence source, but completely removing either holistic semantics or native-scale detail is often unstable. \method uses Nash bargaining not as a decorative analogy, but as the actual inference-time decision rule.
 
 \section{Method}
 
-\subsection{Problem Setup}
+\subsection{Problem Definition}
 
-Given a prompt $c$, a pretrained video diffusion model first generates a base video at its native resolution. The base video is upsampled to the target resolution, encoded into latent space, and perturbed with Gaussian noise following an SDEdit-style refinement process. High-resolution denoising then starts from this noisy latent.
+Given a text prompt $c$, a pretrained text-to-video diffusion model first generates a base video at native resolution. The base video is resized to a target resolution, encoded into latent space, and perturbed with Gaussian noise following SDEdit-style refinement \cite{meng2021sdedit}. A high-resolution denoising process then reconstructs a video at the target resolution.
 
-Let $z_t$ be the latent at denoising step $t$. The high-resolution denoiser contains self-attention layers and cross-attention layers. Self-attention controls spatiotemporal token interaction, while cross-attention injects semantic information from the text prompt. \method focuses on cross-attention because it is the direct pathway through which prompt semantics enter the denoising process.
+Let $z_t$ denote the latent at denoising step $t$. The denoiser contains self-attention layers and cross-attention layers. Self-attention controls spatial and temporal token interaction, while cross-attention injects prompt semantics. \method focuses on cross-attention because semantic failure at high resolution often appears as repeated objects, misplaced attributes, or weak prompt alignment. The goal is to decide how much semantic authority different evidence sources should receive when forming the cross-attention output.
 
-\subsection{Local-Global Dual Branches}
+\subsection{Players in the Nash Semantic Game}
 
-During high-resolution refinement, the latent is duplicated into two branches. The local branch uses inward sliding-window self-attention, keeping each query token's receptive field near the native training scale. The global branch uses full attention to provide holistic context.
+We define a two-player cooperative game at each cross-attention token. The players are semantic agents rather than trainable modules:
+\begin{itemize}
+    \item The holistic semantic agent $\mathcal{H}$ protects prompt-level consistency, object count, scene layout, and long-range coherence. In implementation, it is instantiated by full or cached full-attention evidence.
+    \item The native-scale evidence agent $\mathcal{N}$ protects texture, boundaries, and local detail under the model's native receptive-field prior. In implementation, it is instantiated by inward window-attention evidence.
+\end{itemize}
 
 At a cross-attention layer, let
 \begin{equation}
-    O_l(q), O_g(q) \in \mathbb{R}^{H \times D}
+    O_h(q), O_n(q) \in \mathbb{R}^{H \times D}
 \end{equation}
-denote the local and global branch cross-attention outputs for token $q$, before the output projection. Here $H$ is the number of heads and $D$ is the head dimension. Let $Q_l(q)$ and $Q_g(q)$ be the corresponding query features.
+be the attention responses proposed by $\mathcal{H}$ and $\mathcal{N}$ for token $q$, before the output projection. Let $Q_h(q)$ and $Q_n(q)$ be the corresponding query tensors. Here $H$ is the number of attention heads and $D$ is the head dimension.
 
-\subsection{Branch Payoff}
-
-\method assigns a positive payoff to each branch. The payoff should be high when the branch output is compatible with the current query and when the branch produces a confident response. For branch $b \in \{l,g\}$, we define
+The final representation cannot keep both proposals independently. It must produce a single response for the downstream residual block. We therefore define a semantic authority allocation $\alpha(q)$, where $\alpha(q)$ is the authority assigned to $\mathcal{H}$ and $1-\alpha(q)$ is the authority assigned to $\mathcal{N}$:
 \begin{equation}
-\begin{split}
-u_b(q) = \pi_b \Bigg[
-&\frac{1 + \cos(\mathrm{vec}(O_b(q)), \mathrm{vec}(Q_b(q)))}{2} \\
-&+ \sigma \left(
-\frac{\mathrm{rms}(O_b(q))}
-{\mathrm{mean}_{q'}\mathrm{rms}(O_b(q')) + \epsilon}
-- 1
-\right)
-+ \epsilon
-\Bigg],
-\end{split}
-\label{eq:payoff}
+    O(q) = \alpha(q) O_h(q) + (1-\alpha(q))O_n(q).
 \end{equation}
-where $\pi_b$ is a branch prior, $\sigma(\cdot)$ is the sigmoid function, and $\epsilon$ is a small constant. The cosine term measures query-output compatibility. The normalized RMS term measures response confidence relative to the layer average. By default, we set $\pi_g=1.25$ and $\pi_l=1.0$, giving a conservative prior to global semantic stability while still permitting local evidence to influence the output.
+The central problem is how to choose $\alpha(q)$ in a principled and adaptive way.
 
-\subsection{Nash Equilibrium Gate}
+\subsection{Why a Fixed Strategy Is Insufficient}
 
-Let $a(q)$ be the semantic authority assigned to the global branch for token $q$. The local branch receives $1-a(q)$. We solve the following Nash social-welfare problem:
+A fixed strategy $\alpha(q)=\lambda$ assumes the same bargaining outcome for every token. This assumption is too restrictive for high-resolution video refinement. Different regions and denoising phases require different semantic authority. Large objects and scene layout benefit from the holistic agent, while hair, wrinkles, texture, and boundaries benefit from the native-scale agent. A single coefficient must either over-trust holistic evidence and lose detail, or over-trust native-scale evidence and risk semantic fragmentation.
+
+More importantly, a fixed strategy has no equilibrium interpretation. It does not define players, utilities, or a feasible allocation set. If the native-scale agent currently produces confident evidence that agrees with its query, but the holistic agent is stale due to caching, a fixed rule cannot respond. Conversely, if native-scale evidence is noisy while holistic evidence clearly matches the prompt context, the fixed rule still assigns the same authority. We need a decision rule that is sensitive to agent utility.
+
+\subsection{Utility Construction for Semantic Agents}
+
+\method defines a positive utility for each semantic agent. This utility is not an external learned score. It is computed directly from the current attention tensors, so it can be used without finetuning. For agent $a \in \{h,n\}$, the utility has two components: query-response alignment and response confidence.
+
+First, alignment measures whether the agent's response points in a direction consistent with the query that requested it:
 \begin{equation}
-a^*(q) =
-\arg\max_{a \in [0,1]}
-u_g(q)\log(a+\epsilon)
-+ u_l(q)\log(1-a+\epsilon).
-\label{eq:nash_objective}
+    A_a(q)=
+    \frac{1+\cos(\operatorname{vec}(O_a(q)),
+    \operatorname{vec}(Q_a(q)))}{2}.
 \end{equation}
+The value is positive and lies in $[0,1]$. An agent receives higher alignment utility when its cross-attention response is consistent with the token representation that requested semantic evidence.
 
-The closed-form ratio is
+Second, confidence measures whether the response has meaningful magnitude relative to the layer average:
 \begin{equation}
-r(q) =
-\frac{u_g(q)^{1/\tau}}
-{u_g(q)^{1/\tau} + u_l(q)^{1/\tau}},
-\label{eq:nash_ratio}
+    R_a(q)=
+    \sigma\left(
+    \frac{\operatorname{RMS}(O_a(q))}
+    {\operatorname{mean}_{q'}\operatorname{RMS}(O_a(q'))+\epsilon}
+    -1
+    \right).
 \end{equation}
-where $\tau$ is a temperature controlling the sharpness of the allocation.
+This term is high when an agent produces a response stronger than the typical token response at the same layer. It avoids trusting an agent merely because its vector is directionally aligned but nearly inactive.
 
-Training-free inference can be sensitive to extreme gates, so we map the ratio into a bounded interval:
+The final utility is
 \begin{equation}
-a(q) = a_{\min} + (a_{\max} - a_{\min})r(q).
-\label{eq:bounded_gate}
+    u_a(q)=\pi_a\left(A_a(q)+R_a(q)+\epsilon\right),
+    \label{eq:utility}
 \end{equation}
-We use $a_{\min}=0.65$ and $a_{\max}=0.98$ by default. The final cross-attention output is
+where $\pi_a$ is an agent prior. We set $\pi_h=1.25$ and $\pi_n=1.0$ by default. This gives the holistic agent a conservative semantic prior, while the native-scale agent can still receive substantial authority when its measured utility is high.
+
+This design directly connects attention evidence to the Nash idea. Utility is the value each player brings to the semantic bargaining game. $u_h(q)$ measures the value of holistic semantic evidence for token $q$, and $u_n(q)$ measures the value of native-scale evidence for the same token. The final authority allocation is not manually chosen; it is the equilibrium induced by these utilities.
+
+\subsection{Nash Bargaining Solution}
+
+For each token $q$, the two semantic agents bargain over one unit of authority. Let $\alpha_h(q)=\alpha(q)$ and $\alpha_n(q)=1-\alpha(q)$. The feasible set is the simplex
 \begin{equation}
-O_{\mathrm{Nash}}(q)
-= a(q)O_g(q) + (1-a(q))O_l(q).
-\label{eq:fusion}
+    \Delta=\{(\alpha_h,\alpha_n)\mid
+    \alpha_h>0,\alpha_n>0,\alpha_h+\alpha_n=1\}.
 \end{equation}
-
-This gate never fully removes global semantic guidance, but it can recover local detail whenever the local payoff is strong. The entire computation is parameter-free and differentiability is not required because the method is used at inference time.
-
-\subsection{Cache-Compatible Inference}
-
-Global branch computation is expensive at high resolution. \method therefore supports cached global cross-attention. Let $t'$ be the latest step where the global candidate is refreshed. At an intermediate step $t$, the fusion becomes
+The Nash bargaining objective is
 \begin{equation}
-O_{\mathrm{Nash},t}(q)
-= a_t(q)O_{g,t'}(q) + (1-a_t(q))O_{l,t}(q).
-\label{eq:cached}
+    \max_{\alpha \in (0,1)}
+    \mathcal{N}(\alpha;q)
+    =
+    u_h(q)\log(\alpha+\epsilon)
+    +u_n(q)\log(1-\alpha+\epsilon).
+    \label{eq:nash_objective}
 \end{equation}
-The global candidate is reused, but the local branch is still computed at the current latent state. This allows the Nash gate to react to the current denoising dynamics while retaining most of the acceleration from caching.
+Equivalently, Eq.~\eqref{eq:nash_objective} maximizes the log Nash product
+$(\alpha+\epsilon)^{u_h(q)}(1-\alpha+\epsilon)^{u_n(q)}$.
 
-\subsection{Algorithm}
+\begin{proposition}
+Ignoring the small numerical constant $\epsilon$, the unique maximizer of Eq.~\eqref{eq:nash_objective} is
+\begin{equation}
+    \alpha^*(q)=
+    \frac{u_h(q)}
+    {u_h(q)+u_n(q)}.
+    \label{eq:closed_form}
+\end{equation}
+\end{proposition}
 
-\begin{figure}[t]
-\placeholderfigure{Overview placeholder: base video generation, high-resolution latent refinement, local-global branches, Nash gate, and cached global candidate. Replace with the final method figure.}
-\caption{Overview of \method. A local branch preserves native-scale detail, while a global branch provides holistic context. The Nash gate fuses their cross-attention outputs with token-wise equilibrium weights.}
+\noindent\textbf{Proof.}
+The objective is strictly concave in $\alpha$ because its second derivative is negative:
+\begin{equation}
+    \frac{\partial^2 \mathcal{N}}{\partial \alpha^2}
+    =
+    -\frac{u_h}{\alpha^2}
+    -\frac{u_n}{(1-\alpha)^2}
+    <0.
+\end{equation}
+Setting the first derivative to zero gives
+\begin{equation}
+    \frac{u_h}{\alpha}
+    -
+    \frac{u_n}{1-\alpha}
+    =0,
+\end{equation}
+which yields Eq.~\eqref{eq:closed_form}. Since the objective is strictly concave, this stationary point is the unique global optimum. \hfill $\square$
+
+The equilibrium has an intuitive interpretation. If the holistic utility increases while the native-scale utility is fixed, the holistic agent receives more authority. If the native-scale utility increases, the native-scale agent receives more authority. If the two utilities are equal, the unbounded equilibrium gives equal shares. Thus, the gate is not an arbitrary adaptive weight; it is the Nash bargaining solution of the semantic authority game.
+
+\subsection{Temperature and Bounded Equilibrium Gate}
+
+Training-free high-resolution diffusion can be sensitive to extreme authority assignments. To control sharpness, we apply a temperature to the utilities:
+\begin{equation}
+    \tilde{u}_a(q)=u_a(q)^{1/\tau}.
+\end{equation}
+The raw equilibrium ratio is
+\begin{equation}
+    r(q)=
+    \frac{\tilde{u}_h(q)}
+    {\tilde{u}_h(q)+\tilde{u}_n(q)+\epsilon}.
+    \label{eq:nash_ratio}
+\end{equation}
+We then map the ratio into a bounded interval:
+\begin{equation}
+    \alpha(q)=
+    \alpha_{\min}
+    +(\alpha_{\max}-\alpha_{\min})r(q).
+    \label{eq:bounded_gate}
+\end{equation}
+The default setting is $\alpha_{\min}=0.65$ and $\alpha_{\max}=0.98$. The lower bound prevents holistic semantics from disappearing, and the upper bound prevents native-scale detail from being completely suppressed. This bounded equilibrium rule is especially useful when cached holistic evidence is used.
+
+The final Nash cross-attention output is
+\begin{equation}
+    O_{\mathrm{Nash}}(q)=
+    \alpha(q)O_h(q)+(1-\alpha(q))O_n(q).
+    \label{eq:fusion}
+\end{equation}
+The operation is lightweight, differentiability is unnecessary, and no additional model parameters are introduced.
+
+\subsection{Cache-Compatible Semantic Play}
+
+Holistic semantic evidence is expensive at high resolution when instantiated with full attention. \method therefore supports cached semantic play. Let $t'$ be the most recent step where the holistic agent is refreshed. At step $t$, the cached variant uses
+\begin{equation}
+    O_{\mathrm{Nash},t}(q)=
+    \alpha_t(q)O_{h,t'}(q)+
+    (1-\alpha_t(q))O_{n,t}(q).
+    \label{eq:cached}
+\end{equation}
+The native-scale agent is always evaluated at the current step, while the holistic agent can reuse evidence for several steps. This design preserves the acceleration benefit of caching but avoids blindly copying stale holistic responses. A cached response must still earn semantic authority through its utility and the Nash allocation.
+
+\subsection{Implementation Correspondence}
+
+The algorithm is implemented in three parts. The file \texttt{nash\_cash.py} defines the utility observation and equilibrium allocation. The function \texttt{\_branch\_payoff} keeps its code name for compatibility, but mathematically implements Eq.~\eqref{eq:utility}: attention alignment plus normalized response confidence. The function \texttt{nash\_equilibrium\_mix} implements Eq.~\eqref{eq:nash_ratio}, Eq.~\eqref{eq:bounded_gate}, and Eq.~\eqref{eq:fusion}. The cache and non-cache attention processors instantiate the holistic and native-scale agents, then call this Nash allocation rule. This code-level mapping is important: the Nash principle is not only a motivation, but the actual decision rule used to produce the cross-attention output.
+
+\begin{figure*}[t]
+\placeholderfigure{Method overview placeholder: base video generation, latent upsampling, holistic semantic agent, native-scale evidence agent, utility observation, Nash authority allocation, and cache-compatible semantic play. Replace this box with the final figure before submission.}
+\caption{Overview of \method. Holistic and native-scale semantic agents negotiate cross-attention authority through a Nash bargaining solution.}
 \label{fig:overview}
-\end{figure}
+\end{figure*}
+
+\subsection{Algorithm Summary}
 
 \begin{enumerate}
-    \item Generate a base video at native resolution from prompt $c$.
-    \item Upsample the base video to the target resolution and encode it into latent space.
-    \item Add Gaussian noise with strength $s$.
-    \item For each denoising step, compute local branch features and global branch features.
-    \item At cross-attention layers, compute branch payoffs using Eq.~\eqref{eq:payoff}.
-    \item Compute the Nash gate using Eq.~\eqref{eq:nash_ratio} and Eq.~\eqref{eq:bounded_gate}.
-    \item Fuse branch outputs using Eq.~\eqref{eq:fusion}; in cache mode, use Eq.~\eqref{eq:cached}.
+    \item Generate a base video from prompt $c$ at the native resolution of the pretrained model.
+    \item Resize the base video to the target resolution and initialize high-resolution SDEdit refinement.
+    \item Instantiate the holistic semantic agent and native-scale evidence agent in the denoiser.
+    \item At each cross-attention layer, compute $O_n(q)$ and $O_h(q)$.
+    \item Observe agent utilities $u_n(q)$ and $u_h(q)$ from alignment and confidence.
+    \item Solve the closed-form Nash bargaining equilibrium to obtain $\alpha(q)$.
+    \item Allocate semantic authority with Eq.~\eqref{eq:fusion} and continue denoising.
 \end{enumerate}
 
 \section{Experiments}
 
-\subsection{Experimental Setup}
+\subsection{Evaluation Principle}
 
-The final evaluation should use a fixed prompt set, fixed random seeds, and official video generation metrics. Unless otherwise specified, the recommended setting is:
+The experiments must test the central claim of this paper: Nash semantic bargaining improves the quality-efficiency trade-off over fixed inference strategies. Therefore, all comparisons should use the same pretrained model, prompts, random seeds, target resolution, precision, and hardware. For fair evaluation, \method and all baselines should also use the same low-resolution base videos before high-resolution refinement. Otherwise, random differences in the base video may be mistaken for improvements caused by the Nash authority rule.
+
+\subsection{Setup}
+
+Unless otherwise specified, we use a pretrained video diffusion transformer and run training-free high-resolution refinement. The default configuration is:
 \begin{itemize}
-    \item Backbone: pretrained video Diffusion Transformer.
-    \item Resolution: $1920 \times 1088$ for 1080P; $3380 \times 1920$ for 3K.
-    \item Denoising steps: 50.
-    \item SDEdit strength: 0.7.
+    \item Base generation resolution: native model resolution.
+    \item Target resolution: $1920 \times 1088$ for the 1080P setting.
+    \item Number of frames: 81.
+    \item Denoising steps: 50 for base generation and 35 for high-resolution refinement.
     \item Guidance scale: 5.0.
-    \item Cache interval: $P=2$ by default.
+    \item SDEdit strength: 0.7.
+    \item Nash bounds: $\alpha_{\min}=0.65$, $\alpha_{\max}=0.98$.
+    \item Agent priors: $\pi_h=1.25$, $\pi_n=1.0$.
+    \item Cache interval: $P=2$ unless otherwise noted.
 \end{itemize}
 
-Metrics should include subject consistency, background consistency, motion smoothness, aesthetic quality, imaging quality, overall consistency, overall score, and inference time. Each method should be evaluated with the same prompts, seeds, model weights, precision, and hardware.
+\subsection{Metrics}
+
+We recommend reporting both automatic metrics and qualitative comparisons. Automatic metrics should include subject consistency, background consistency, motion smoothness, aesthetic quality, imaging quality, temporal consistency, prompt alignment, total score, and runtime. VBench-style evaluation is suitable for broad video quality analysis \cite{huang2024vbench}. Runtime should be measured on the same GPU with the same precision and target resolution.
 
 \subsection{Main Comparison}
 
 \begin{table*}[t]
 \centering
-\caption{Main 1080P evaluation template. Values should be filled only after running the official evaluation protocol. Higher is better for all quality metrics; lower is better for inference time.}
+\caption{Main 1080P comparison template. Fill the numbers after running the official evaluation protocol. Higher is better for quality metrics; lower is better for runtime.}
 \label{tab:main}
 \begin{tabular}{lcccccccc}
 \toprule
-Method & Subject & Background & Motion & Aesthetic & Imaging & Overall Cons. & Overall Score & Time \\
+Method & Subject & Background & Motion & Aesthetic & Imaging & Align. & Overall & Time \\
 \midrule
-Native high-resolution inference & TBD & TBD & TBD & TBD & TBD & TBD & TBD & TBD \\
-Local-window only & TBD & TBD & TBD & TBD & TBD & TBD & TBD & TBD \\
-Fixed local-global override & TBD & TBD & TBD & TBD & TBD & TBD & TBD & TBD \\
-\method\ w/o cache & TBD & TBD & TBD & TBD & TBD & TBD & TBD & TBD \\
-\method\ w/ cache, $P=2$ & TBD & TBD & TBD & TBD & TBD & TBD & TBD & TBD \\
-\method\ w/ cache, $P=5$ & TBD & TBD & TBD & TBD & TBD & TBD & TBD & TBD \\
+Direct high-resolution inference & \TBD & \TBD & \TBD & \TBD & \TBD & \TBD & \TBD & \TBD \\
+Native-scale agent only & \TBD & \TBD & \TBD & \TBD & \TBD & \TBD & \TBD & \TBD \\
+Holistic agent only & \TBD & \TBD & \TBD & \TBD & \TBD & \TBD & \TBD & \TBD \\
+Fixed authority allocation & \TBD & \TBD & \TBD & \TBD & \TBD & \TBD & \TBD & \TBD \\
+\method\ without cache & \TBD & \TBD & \TBD & \TBD & \TBD & \TBD & \TBD & \TBD \\
+\method\ with cache, $P=2$ & \TBD & \TBD & \TBD & \TBD & \TBD & \TBD & \TBD & \TBD \\
 \bottomrule
 \end{tabular}
 \end{table*}
 
-The main comparison should verify whether adaptive Nash fusion improves the quality-efficiency trade-off over fixed local-global mixing. The most important metrics are aesthetic quality, imaging quality, overall consistency, and total runtime.
+The key comparison is between fixed authority allocation and \method. If the Nash formulation is effective, \method should improve imaging quality and temporal consistency while preserving prompt alignment. The agent-only rows diagnose the two failure modes: loss of detail versus semantic fragmentation.
 
-\subsection{Ablation Study}
+\subsection{Ablation on Nash Components}
 
 \begin{table}[t]
 \centering
-\caption{Ablation template for Nash gate design.}
-\label{tab:ablation}
+\caption{Ablation template for the Nash equilibrium design.}
+\label{tab:nash_ablation}
 \begin{tabular}{lccc}
 \toprule
-Variant & Aesthetic & Imaging & Score \\
+Variant & Imaging & Align. & Overall \\
 \midrule
-No Nash gate & TBD & TBD & TBD \\
-$a_{\min}=0.55$ & TBD & TBD & TBD \\
-$a_{\min}=0.65$ & TBD & TBD & TBD \\
-$a_{\min}=0.75$ & TBD & TBD & TBD \\
-$a_{\max}=0.90$ & TBD & TBD & TBD \\
-$a_{\max}=0.98$ & TBD & TBD & TBD \\
-$\pi_g=1.00$ & TBD & TBD & TBD \\
-$\pi_g=1.25$ & TBD & TBD & TBD \\
-$\pi_g=1.50$ & TBD & TBD & TBD \\
+No Nash authority rule & \TBD & \TBD & \TBD \\
+Alignment utility only & \TBD & \TBD & \TBD \\
+Confidence utility only & \TBD & \TBD & \TBD \\
+No agent prior & \TBD & \TBD & \TBD \\
+Unbounded Nash allocation & \TBD & \TBD & \TBD \\
+Full \method & \TBD & \TBD & \TBD \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-The ablation should test the contribution of the Nash objective, the bounded gate, branch priors, and cache interval. It should also include qualitative examples where local-only inference repeats objects and global-only inference loses detail.
+This ablation verifies whether each part of the Nash design is necessary. Removing the Nash authority rule tests whether equilibrium allocation matters. Removing alignment or confidence tests the utility construction. Removing priors tests whether a conservative holistic semantic preference is helpful. Removing bounds tests whether the unconstrained equilibrium is stable enough for training-free high-resolution denoising.
 
-\subsection{Qualitative Results}
+\subsection{Ablation on Gate Bounds and Priors}
+
+\begin{table}[t]
+\centering
+\caption{Ablation template for equilibrium bounds and agent priors.}
+\label{tab:gate_ablation}
+\begin{tabular}{lccc}
+\toprule
+Setting & Imaging & Align. & Overall \\
+\midrule
+$\alpha_{\min}=0.55,\alpha_{\max}=0.98$ & \TBD & \TBD & \TBD \\
+$\alpha_{\min}=0.65,\alpha_{\max}=0.98$ & \TBD & \TBD & \TBD \\
+$\alpha_{\min}=0.75,\alpha_{\max}=0.98$ & \TBD & \TBD & \TBD \\
+$\alpha_{\min}=0.65,\alpha_{\max}=0.90$ & \TBD & \TBD & \TBD \\
+$\pi_h=1.00,\pi_n=1.00$ & \TBD & \TBD & \TBD \\
+$\pi_h=1.25,\pi_n=1.00$ & \TBD & \TBD & \TBD \\
+$\pi_h=1.50,\pi_n=1.00$ & \TBD & \TBD & \TBD \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+This ablation studies how much holistic semantic authority should be protected. Very low $\alpha_{\min}$ may allow native-scale evidence to dominate and weaken prompt consistency. Very high $\alpha_{\min}$ may suppress detail. The prior $\pi_h$ provides a second mechanism for preserving semantics, while still allowing native-scale evidence to win when its utility is strong.
+
+\subsection{Cache Interval Analysis}
+
+\begin{table}[t]
+\centering
+\caption{Runtime and quality template for cache interval analysis.}
+\label{tab:cache}
+\begin{tabular}{lccc}
+\toprule
+Variant & Overall & Runtime & Speedup \\
+\midrule
+\method\ without cache & \TBD & \TBD & 1.0$\times$ \\
+\method\ cache, $P=2$ & \TBD & \TBD & \TBD \\
+\method\ cache, $P=5$ & \TBD & \TBD & \TBD \\
+\method\ cache, $P=8$ & \TBD & \TBD & \TBD \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+The cache interval controls the balance between semantic freshness and speed. A small interval refreshes the holistic agent frequently and should improve semantic reliability. A large interval reduces runtime but may make holistic evidence stale. The Nash utility is expected to mitigate this staleness because a cached response with low alignment or confidence receives a lower equilibrium share.
+
+\subsection{Qualitative Evaluation}
 
 \begin{figure*}[t]
-\placeholderfigure{Qualitative comparison placeholder: native inference, local-only, fixed override, and \method. Replace with generated frames after experiments.}
-\caption{Qualitative comparison template. The final figure should show repeated-object cases, fine texture cases, and prompts requiring long-range layout consistency.}
+\placeholderfigure{Qualitative comparison placeholder: direct high-resolution inference, native-scale-only, fixed authority allocation, and \method. Replace this box with representative frames and zoomed crops after experiments.}
+\caption{Qualitative comparison template. The final figure should show global layout, object count, local texture, and temporal stability.}
 \label{fig:qualitative}
 \end{figure*}
 
-The qualitative analysis should focus on four aspects: object count, global layout, local texture, and temporal stability. \method is expected to be most beneficial when a scene contains both fine details and long-range structure, such as close-up faces, animals in complex environments, vehicles in large urban scenes, and camera motion over dense backgrounds.
-
-\subsection{Runtime Analysis}
-
-\begin{table}[t]
-\centering
-\caption{Runtime template for cache interval analysis.}
-\label{tab:runtime}
-\begin{tabular}{lcc}
-\toprule
-Variant & Runtime & Speedup \\
-\midrule
-\method\ w/o cache & TBD & 1.0$\times$ \\
-\method\ cache, $P=2$ & TBD & TBD \\
-\method\ cache, $P=5$ & TBD & TBD \\
-\method\ cache, $P=8$ & TBD & TBD \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-The cache interval controls the trade-off between semantic freshness and speed. A small interval provides stronger global guidance, while a larger interval reduces computation. The final paper should report both quality and runtime for each interval.
+Qualitative results should emphasize cases where the Nash mechanism is necessary. Examples include detailed faces, dense city scenes, repeated background structures, small textural elements, and moving objects. For each example, the paper should show full frames and zoomed crops. The expected visual pattern is that native-scale-only inference preserves texture but may duplicate or misplace objects, while fixed holistic-heavy allocation preserves layout but may smooth detail. \method should demonstrate a better balance when the utility-driven equilibrium allocation is effective.
 
 \section{Discussion}
 
-\method is a training-free method, so its gains depend on the quality of branch payoffs. The proposed payoff combines compatibility and confidence, but other signals may be useful, such as attention entropy, prompt-token saliency, or temporal consistency. The bounded gate is also important: unconstrained Nash allocation may produce extreme values when one payoff dominates. The bounds keep the method stable under high-resolution extrapolation.
+\subsection{Why the Nash Formulation Matters}
 
-The method is intended to complement, rather than replace, strong pretrained generators. It does not require retraining, new video datasets, or additional supervision. Its main cost is the extra branch computation and cross-attention fusion. Cache-compatible inference reduces this overhead.
+The main value of \method is not that it introduces another scalar weight. Its value is that the weight is the solution of a game whose players, utilities, and feasible resource are explicitly defined. The players are the holistic semantic agent and the native-scale evidence agent. The utility of each player is defined in Eq.~\eqref{eq:utility}. The resource is one unit of semantic authority at a token. The solution is the Nash bargaining equilibrium in Eq.~\eqref{eq:closed_form}, bounded for stable diffusion inference in Eq.~\eqref{eq:bounded_gate}. This structure makes the inference rule interpretable, testable, and extensible.
+
+The utility design also makes the method adaptive without learning. Alignment answers whether an agent's response matches what the token requested. Confidence answers whether the agent produced a meaningful response. The agent prior encodes a conservative preference for holistic prompt semantics. These terms are available inside the attention layer, so the method can be deployed on a pretrained model without extra supervision.
+
+\subsection{Limitations}
+
+\method depends on the quality of the utility observation. Alignment and confidence are simple and efficient, but they are not the only possible utility signals. Future variants could include attention entropy, prompt-token saliency, temporal feature consistency, or motion-aware utility terms. The method also assumes that both semantic agents can provide useful evidence. If one source is severely degraded, the equilibrium allocation can reduce its authority but cannot invent missing information.
 
 \section{Conclusion}
 
-We presented \method, a game-theoretic cross-attention harmonization method for training-free ultra-high-resolution video generation. By treating local and global branches as cooperative players in a Nash bargaining game, \method computes token-wise equilibrium gates that adaptively balance semantic consistency and local detail. The method is parameter-free, cache-compatible, and designed for practical 1080P, 3K, and 4K video synthesis. Future work includes learning stronger payoff functions, extending the gate to temporal consistency objectives, and integrating the method with additional video backbones.
+We introduced \method, a Nash bargaining principle for semantic authority allocation in training-free ultra-high-resolution video generation. The method treats holistic semantic evidence and native-scale visual evidence as cooperative agents that negotiate cross-attention authority. By defining utilities from query-response alignment and confidence, \method connects the game-theoretic objective directly to measurable attention behavior. The closed-form Nash solution adaptively allocates authority between semantic agents, while cached inference keeps the method practical for high-resolution refinement. This formulation provides a principled alternative to fixed inference strategies and a clear experimental path for validating the role of Nash equilibrium in ultra-high-resolution video generation.
 
 \begin{thebibliography}{99}
 
@@ -355,11 +484,6 @@ In \emph{ICCV}, 2021.
 A. Hassani and H. Shi.
 Neighborhood attention Transformer.
 In \emph{CVPR}, 2023.
-
-\bibitem{ho2022cfg}
-J. Ho and T. Salimans.
-Classifier-free diffusion guidance.
-In \emph{NeurIPS Workshop}, 2021.
 
 \bibitem{huang2024vbench}
 Z. Huang, Y. He, J. Yu, F. Zhang, C. Si, Y. Jiang, Y. Zhang, T. Wu, Q. Jin, N. Chanpaisit, Y. Wang, X. Chen, L. Wang, D. Lin, Y. Qiao, and Z. Liu.
