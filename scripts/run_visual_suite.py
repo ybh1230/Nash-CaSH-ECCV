@@ -21,8 +21,8 @@ def write_prompt_file(prompt_dir: Path, prompt_id: str, prompt: str) -> Path:
     return prompt_path
 
 
-def run_one(args, prompt_item):
-    output_dir = Path(args.output_dir) / args.method_name
+def run_one(args, prompt_item, method_name):
+    output_dir = Path(args.output_dir) / method_name
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"{prompt_item['id']}.mp4"
     if output_path.exists() and not args.overwrite:
@@ -47,7 +47,19 @@ def run_one(args, prompt_item):
         str(prompt_path),
         "--output",
         str(output_path),
+        "--route_mode",
+        method_name,
     ]
+    if args.log_maps:
+        log_dir = Path(args.output_dir) / "logs" / method_name / prompt_item["id"]
+        cmd += [
+            "--authority_log_dir",
+            str(log_dir),
+            "--authority_log_stride",
+            str(args.authority_log_stride),
+            "--authority_log_token_stride",
+            str(args.authority_log_token_stride),
+        ]
     print("[run]", " ".join(cmd))
     subprocess.run(cmd, check=True)
 
@@ -56,7 +68,7 @@ def main():
     parser = argparse.ArgumentParser(description="Run the qualitative SemEq visual suite.")
     parser.add_argument("--prompts", default="experiments/visual_prompts.json")
     parser.add_argument("--output_dir", default="outputs/visual_suite")
-    parser.add_argument("--method_name", default="sem_eq", help="Output subdirectory name for the full method")
+    parser.add_argument("--methods", nargs="+", default=["full"], choices=["original", "hafp", "nash", "full"], help="Ablation methods to run")
     parser.add_argument("--ids", nargs="*", default=None, help="Optional prompt ids to run")
     parser.add_argument("--max_prompts", type=int, default=None, help="Optional maximum number of prompts to run")
     parser.add_argument("--mode", choices=["cache", "nocache"], default="cache")
@@ -64,6 +76,9 @@ def main():
     parser.add_argument("--target_width", type=int, default=1280)
     parser.add_argument("--cache_steps", type=int, default=2)
     parser.add_argument("--seed", type=int, default=2026)
+    parser.add_argument("--log_maps", action="store_true", help="Save compressed authority and purification maps")
+    parser.add_argument("--authority_log_stride", type=int, default=4)
+    parser.add_argument("--authority_log_token_stride", type=int, default=256)
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
 
@@ -74,7 +89,8 @@ def main():
     if args.max_prompts is not None:
         prompts = prompts[: args.max_prompts]
     for item in prompts:
-        run_one(args, item)
+        for method_name in args.methods:
+            run_one(args, item, method_name)
 
 
 if __name__ == "__main__":

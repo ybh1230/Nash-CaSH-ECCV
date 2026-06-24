@@ -9,12 +9,17 @@ import torch.nn.functional as F
 
 @dataclass(frozen=True)
 class NashCaSHConfig:
+    route_mode: str = "full"
     floor: float = 0.65
     ceiling: float = 0.98
     temperature: float = 1.0
     full_prior: float = 1.25
     window_prior: float = 1.0
     authority_momentum: float = 0.10
+    purification_strength: float = 0.40
+    purification_tau: float = 1.20
+    purification_anchor_momentum: float = 0.90
+    purification_kernel_size: int = 3
     authority_log_dir: Optional[str] = None
     authority_log_stride: int = 1
     authority_log_token_stride: int = 256
@@ -44,6 +49,83 @@ def _branch_alignment(
 def _branch_energy(output_float: torch.Tensor, eps: float) -> torch.Tensor:
     energy = output_float.pow(2).mean(dim=-1).sqrt()
     return energy.clamp_min(eps)
+
+
+def _token_layout(config: NashCaSHConfig, token_count: int) -> Optional[Tuple[int, int, int]]:
+    height = int(config.authority_latent_height)
+    width = int(config.authority_latent_width)
+    frames = int(config.authority_latent_frames)
+    if height <= 0 or width <= 0:
+        return None
+    frame_tokens = height * width
+    if frame_tokens <= 0 or token_count % frame_tokens != 0:
+        return None
+    if frames <= 0:
+        frames = token_count // frame_tokens
+    if frames * frame_tokens != token_count:
+        return None
+    return frames, height, width
+
+
+def historical_anchor_feature_purification(
+    native_output: torch.Tensor,
+    native_query: torch.Tensor,
+    config: Optional[NashCaSHConfig] = None,
+    previous_anchor: Optional[torch.Tensor] = None,
+) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[torch.Tensor]]:
+    if config is None:
+        config = NashCaSHConfig()
+
+    strength = min(max(float(config.purification_strength), 0.0), 1.0)
+    if strength <= 0.0 or native_output.ndim != 4:
+        anchor = native_output.detach().float().mean(dim=(0, 1), keepdim=True)
+        return native_output, anchor, None
+
+    eps = max(float(config.eps), 1e-12)
+    anchor_momentum = min(max(float(config.purification_anchor_momentum), 0.0), 0.999)
+    output_float = native_output.detach().float()
+    query_float = native_query.detach().float()
+    current_anchor = output_float.mean(dim=(0, 1), keepdim=True)
+
+    if previous_anchor is None or previous_anchor.shape != current_anchor.shape:
+        anchor = current_anchor
+    else:
+        prev = previous_anchor.to(device=output_float.device, dtype=output_float.dtype)
+        anchor = anchor_momentum * prev + (1.0 - anchor_momentum) * current_anchor
+
+    text_commitment = F.cosine_similarity(output_float, query_float, dim=-1).clamp_min(0.0)
+    anchor_similarity = F.cosine_similarity(output_float, anchor.expand_as(output_float), dim=-1).clamp_min(0.0)
+    tau = max(float(config.purification_tau), eps)
+    pollution = (anchor_similarity - tau * text_commitment).clamp_min(0.0)
+    pollution = pollution / pollution.amax(dim=1, keepdim=True).clamp_min(eps)
+    pollution = pollution.unsqueeze(-1)
+
+    layout = _token_layout(config, native_output.shape[1])
+    if layout is None:
+        purified = native_output - strength * pollution.to(native_output.dtype) * (
+            native_output - anchor.to(native_output.dtype)
+        )
+        return purified, anchor.detach(), pollution.detach()
+
+    frames, height, width = layout
+    batch, tokens, heads, dim = native_output.shape
+    kernel_size = max(int(config.purification_kernel_size), 1)
+    if kernel_size % 2 == 0:
+        kernel_size += 1
+    padding = kernel_size // 2
+
+    feature = native_output.float().reshape(batch, frames, height, width, heads, dim)
+    feature = feature.permute(0, 1, 4, 5, 2, 3).reshape(batch * frames * heads, dim, height, width)
+    low = F.avg_pool2d(feature, kernel_size=kernel_size, stride=1, padding=padding)
+    high = feature - low
+
+    pollution_map = pollution.float().reshape(batch, frames, height, width, heads, 1)
+    pollution_map = pollution_map.permute(0, 1, 4, 5, 2, 3).reshape(batch * frames * heads, 1, height, width)
+    purified = low + (1.0 - strength * pollution_map) * high
+    purified = purified.reshape(batch, frames, heads, dim, height, width)
+    purified = purified.permute(0, 1, 4, 5, 2, 3).reshape(batch, tokens, heads, dim)
+    purified = purified.to(dtype=native_output.dtype, device=native_output.device)
+    return purified, anchor.detach(), pollution.detach()
 
 
 def _safe_name(name: str) -> str:
@@ -125,6 +207,83 @@ def log_authority_snapshot(
 
         step_name = "none" if step is None else f"{int(step):04d}"
         file_name = f"authority_call{call_index:05d}_step{step_name}_{_safe_name(layer_name)}.pt"
+        torch.save(record, out_dir / file_name)
+
+
+def log_purification_snapshot(
+    pollution: Optional[torch.Tensor],
+    config: NashCaSHConfig,
+    layer_name: str,
+    step: Optional[int],
+    call_index: int,
+) -> None:
+    if pollution is None or not config.authority_log_dir:
+        return
+
+    stride = max(int(config.authority_log_stride), 1)
+    if call_index % stride != 0:
+        return
+
+    with torch.no_grad():
+        out_dir = Path(config.authority_log_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        score = pollution.detach().float().cpu()
+        if score.ndim == 4 and score.shape[-1] == 1:
+            score = score.squeeze(-1)
+        if score.ndim != 3:
+            return
+
+        h = int(config.authority_latent_height)
+        w = int(config.authority_latent_width)
+        f = int(config.authority_latent_frames)
+        expected_tokens = f * h * w if f > 0 and h > 0 and w > 0 else 0
+
+        if expected_tokens > 0 and score.shape[1] == expected_tokens:
+            token_score = score.mean(dim=(0, 2))
+        elif expected_tokens > 0 and score.shape[2] == expected_tokens:
+            token_score = score.mean(dim=(0, 1))
+        elif score.shape[1] >= score.shape[2]:
+            token_score = score.mean(dim=(0, 2))
+        else:
+            token_score = score.mean(dim=(0, 1))
+
+        token_stride = max(int(config.authority_log_token_stride), 1)
+        token_trace = token_score[::token_stride].contiguous()
+
+        spatial_map = None
+        if h > 0 and w > 0 and token_score.numel() % (h * w) == 0:
+            if f <= 0:
+                f = token_score.numel() // (h * w)
+            if f * h * w == token_score.numel():
+                spatial_map = token_score.reshape(f, h, w).mean(dim=0)
+                map_h = max(int(config.authority_log_map_height), 1)
+                map_w = max(int(config.authority_log_map_width), 1)
+                spatial_map = F.adaptive_avg_pool2d(
+                    spatial_map.unsqueeze(0).unsqueeze(0),
+                    output_size=(min(map_h, h), min(map_w, w)),
+                ).squeeze(0).squeeze(0).contiguous()
+
+        record = {
+            "kind": "purification",
+            "layer": layer_name,
+            "step": int(step) if step is not None else None,
+            "call_index": int(call_index),
+            "shape": tuple(pollution.shape),
+            "mean": float(token_score.mean().item()),
+            "std": float(token_score.std(unbiased=False).item()),
+            "min": float(token_score.min().item()),
+            "max": float(token_score.max().item()),
+            "token_stride": token_stride,
+            "token_trace": token_trace,
+            "spatial_map": spatial_map,
+            "latent_frames": f,
+            "latent_height": h,
+            "latent_width": w,
+        }
+
+        step_name = "none" if step is None else f"{int(step):04d}"
+        file_name = f"purification_call{call_index:05d}_step{step_name}_{_safe_name(layer_name)}.pt"
         torch.save(record, out_dir / file_name)
 
 

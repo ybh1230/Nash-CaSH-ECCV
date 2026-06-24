@@ -19,17 +19,22 @@ parser.add_argument('--strength', type=float, default=0.7, help="SDEdit noise st
 parser.add_argument('--flow_shift', type=float, default=9.0, help="Flow-shift value for high-resolution refinement")
 parser.add_argument('--cache_steps', type=int, default=2, help="Refresh interval for cached full-branch cross-attention")
 parser.add_argument('--output', type=str, default='Nash_CaSH_Old_man.mp4', help="Output video path")
+parser.add_argument('--route_mode', type=str, choices=['original', 'hafp', 'nash', 'full'], default='full', help="Ablation mode: original, HAFP only, Nash routing only, or full SemEq")
 parser.add_argument('--prompt', type=str, default="A realistic close-up of an elderly man with gray hair and a thick gray beard, wearing a light-colored shirt. His head is slightly lowered. The camera zooms from full body to close-up, highlighting detailed facial wrinkles, skin texture, forehead lines, eye bags, and beard strands. High resolution, cinematic lighting, sharp details.", help="Text prompt")
 parser.add_argument('--prompt_file', type=str, default=None, help="Optional text file containing the prompt")
 parser.add_argument('--negative_prompt', type=str, default="repeating patterns, Blurry face, low detail, distorted features, extra limbs, cartoon style, smooth plastic skin, low resolution, flat colors, lack of texture", help="Negative prompt")
 parser.add_argument('--negative_prompt_file', type=str, default=None, help="Optional text file containing the negative prompt")
 parser.add_argument('--seed', type=int, default=None, help="Random seed for reproducible visual comparisons")
-parser.add_argument('--nash_floor', type=float, default=0.65, help="Minimum full-branch share in Nash-CaSH")
-parser.add_argument('--nash_ceiling', type=float, default=0.98, help="Maximum full-branch share in Nash-CaSH")
-parser.add_argument('--nash_temperature', type=float, default=1.0, help="Temperature for Nash-CaSH payoff allocation")
+parser.add_argument('--nash_floor', type=float, default=0.65, help="Minimum contextual-evidence share in SemEq")
+parser.add_argument('--nash_ceiling', type=float, default=0.98, help="Maximum contextual-evidence share in SemEq")
+parser.add_argument('--nash_temperature', type=float, default=1.0, help="Temperature for Nash semantic routing")
 parser.add_argument('--nash_full_prior', type=float, default=1.25, help="Prior payoff multiplier for global full-attention branch")
 parser.add_argument('--nash_window_prior', type=float, default=1.0, help="Prior payoff multiplier for local window-attention branch")
 parser.add_argument('--nash_authority_momentum', type=float, default=0.10, help="EMA momentum for cached authority maps")
+parser.add_argument('--purification_strength', type=float, default=0.40, help="Strength of historical-anchor high-frequency purification")
+parser.add_argument('--purification_tau', type=float, default=1.20, help="Historical-anchor repetition threshold")
+parser.add_argument('--purification_anchor_momentum', type=float, default=0.90, help="EMA momentum for historical feature anchors")
+parser.add_argument('--purification_kernel_size', type=int, default=3, help="Low-pass kernel size for high-frequency residual purification")
 parser.add_argument('--authority_log_dir', type=str, default=None, help="Optional directory for compressed authority-map logs")
 parser.add_argument('--authority_log_stride', type=int, default=1, help="Save one authority snapshot every N cross-attention calls")
 parser.add_argument('--authority_log_token_stride', type=int, default=256, help="Sample one token every N tokens for step-token heatmaps")
@@ -115,12 +120,17 @@ pipe_v2v.scheduler.config.flow_shift = args.flow_shift
 del init_mask_flex
 
 nash_config = NashCaSHConfig(
+    route_mode=args.route_mode,
     floor=args.nash_floor,
     ceiling=args.nash_ceiling,
     temperature=args.nash_temperature,
     full_prior=args.nash_full_prior,
     window_prior=args.nash_window_prior,
     authority_momentum=args.nash_authority_momentum,
+    purification_strength=args.purification_strength,
+    purification_tau=args.purification_tau,
+    purification_anchor_momentum=args.purification_anchor_momentum,
+    purification_kernel_size=args.purification_kernel_size,
     authority_log_dir=args.authority_log_dir,
     authority_log_stride=args.authority_log_stride,
     authority_log_token_stride=args.authority_log_token_stride,

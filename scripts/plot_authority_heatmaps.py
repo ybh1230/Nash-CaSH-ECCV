@@ -26,7 +26,7 @@ def stack_trimmed(vectors):
     return torch.stack([v[:length] for v in vectors], dim=0)
 
 
-def write_summary(records, output_dir: Path):
+def write_summary(records, output_dir: Path, prefix: str):
     rows = []
     for rec in records:
         rows.append(
@@ -43,7 +43,7 @@ def write_summary(records, output_dir: Path):
             }
         )
 
-    with (output_dir / "authority_summary.csv").open("w", newline="", encoding="utf-8") as f:
+    with (output_dir / f"{prefix}_summary.csv").open("w", newline="", encoding="utf-8") as f:
         writer = csv.DictWriter(
             f,
             fieldnames=["file", "step", "call_index", "layer", "mean", "std", "min", "max", "shape"],
@@ -52,7 +52,7 @@ def write_summary(records, output_dir: Path):
         writer.writerows(rows)
 
 
-def plot_step_token(records, output_dir: Path, max_rows: int):
+def plot_step_token(records, output_dir: Path, max_rows: int, prefix: str, label: str):
     groups = defaultdict(list)
     for idx, rec in enumerate(records):
         key = rec.get("step")
@@ -83,7 +83,7 @@ def plot_step_token(records, output_dir: Path, max_rows: int):
 
     fig, ax = plt.subplots(figsize=(10.5, 5.2))
     im = ax.imshow(matrix.numpy(), aspect="auto", cmap="viridis", vmin=0.0, vmax=1.0)
-    ax.set_title("Semantic Authority a(i): Denoising Step x Sampled Token")
+    ax.set_title(f"{label}: Denoising Step x Sampled Token")
     ax.set_xlabel("sampled token index")
     ax.set_ylabel("denoising step")
     if len(labels) <= 16:
@@ -94,13 +94,13 @@ def plot_step_token(records, output_dir: Path, max_rows: int):
         ax.set_yticks(ticks)
         ax.set_yticklabels([labels[i] for i in ticks])
     cbar = fig.colorbar(im, ax=ax, fraction=0.026, pad=0.02)
-    cbar.set_label("contextual authority")
+    cbar.set_label(label)
     fig.tight_layout()
-    fig.savefig(output_dir / "authority_step_token_heatmap.png", dpi=220)
+    fig.savefig(output_dir / f"{prefix}_step_token_heatmap.png", dpi=220)
     plt.close(fig)
 
 
-def plot_spatial_montage(records, output_dir: Path, max_panels: int):
+def plot_spatial_montage(records, output_dir: Path, max_panels: int, prefix: str, label: str):
     groups = defaultdict(list)
     for idx, rec in enumerate(records):
         spatial = rec.get("spatial_map")
@@ -143,13 +143,13 @@ def plot_spatial_montage(records, output_dir: Path, max_panels: int):
 
     if last_im is not None:
         cbar = fig.colorbar(last_im, ax=axes.ravel().tolist(), fraction=0.025, pad=0.02)
-        cbar.set_label("contextual authority")
-    fig.suptitle("Spatial Semantic Authority Maps", y=0.98)
-    fig.savefig(output_dir / "authority_spatial_montage.png", dpi=220, bbox_inches="tight")
+        cbar.set_label(label)
+    fig.suptitle(f"Spatial {label} Maps", y=0.98)
+    fig.savefig(output_dir / f"{prefix}_spatial_montage.png", dpi=220, bbox_inches="tight")
     plt.close(fig)
 
 
-def plot_mean_curve(records, output_dir: Path):
+def plot_mean_curve(records, output_dir: Path, prefix: str, label: str):
     groups = defaultdict(list)
     for idx, rec in enumerate(records):
         key = rec.get("step")
@@ -168,20 +168,21 @@ def plot_mean_curve(records, output_dir: Path):
 
     fig, ax = plt.subplots(figsize=(8.5, 3.6))
     ax.plot(xs, ys, marker="o", linewidth=1.8, markersize=3.0)
-    ax.set_title("Mean Contextual Authority Across Denoising")
+    ax.set_title(f"Mean {label} Across Denoising")
     ax.set_xlabel("denoising step")
-    ax.set_ylabel("mean a(i)")
+    ax.set_ylabel(f"mean {label}")
     ax.set_ylim(0.0, 1.0)
     ax.grid(True, alpha=0.25)
     fig.tight_layout()
-    fig.savefig(output_dir / "authority_step_mean_curve.png", dpi=220)
+    fig.savefig(output_dir / f"{prefix}_step_mean_curve.png", dpi=220)
     plt.close(fig)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Plot SemEq/Nash authority heatmaps.")
+    parser = argparse.ArgumentParser(description="Plot SemEq authority or HAFP purification heatmaps.")
     parser.add_argument("--log_dir", required=True, help="Directory containing authority_*.pt files")
     parser.add_argument("--output_dir", default=None, help="Directory for plotted heatmaps")
+    parser.add_argument("--kind", choices=["authority", "purification"], default="authority")
     parser.add_argument("--max_rows", type=int, default=80, help="Maximum rows in the step-token heatmap")
     parser.add_argument("--max_spatial_panels", type=int, default=6, help="Maximum spatial maps in the montage")
     args = parser.parse_args()
@@ -190,20 +191,23 @@ def main():
     output_dir = Path(args.output_dir) if args.output_dir else log_dir / "plots"
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    prefix = args.kind
+    label = "contextual authority a(i)" if args.kind == "authority" else "purification pollution P(i)"
+
     records = []
-    for path in sorted(log_dir.glob("authority_*.pt")):
+    for path in sorted(log_dir.glob(f"{prefix}_*.pt")):
         rec = load_record(path)
         rec["file"] = path.name
         records.append(rec)
 
     if not records:
-        raise SystemExit(f"No authority_*.pt files found in {log_dir}")
+        raise SystemExit(f"No {prefix}_*.pt files found in {log_dir}")
 
-    write_summary(records, output_dir)
-    plot_step_token(records, output_dir, max_rows=args.max_rows)
-    plot_spatial_montage(records, output_dir, max_panels=args.max_spatial_panels)
-    plot_mean_curve(records, output_dir)
-    print(f"Wrote authority plots to {output_dir}")
+    write_summary(records, output_dir, prefix=prefix)
+    plot_step_token(records, output_dir, max_rows=args.max_rows, prefix=prefix, label=label)
+    plot_spatial_montage(records, output_dir, max_panels=args.max_spatial_panels, prefix=prefix, label=label)
+    plot_mean_curve(records, output_dir, prefix=prefix, label=label)
+    print(f"Wrote {prefix} plots to {output_dir}")
 
 
 if __name__ == "__main__":

@@ -7,7 +7,13 @@ import torch.nn.functional as F
 from diffusers.models.attention_dispatch import dispatch_attention_fn
 from functools import partial, lru_cache
 from torch.nn.attention.flex_attention import create_block_mask, flex_attention
-from nash_cash import NashCaSHConfig, log_authority_snapshot, nash_equilibrium_mix
+from nash_cash import (
+    NashCaSHConfig,
+    historical_anchor_feature_purification,
+    log_authority_snapshot,
+    log_purification_snapshot,
+    nash_equilibrium_mix,
+)
 create_block_mask = torch.compile(create_block_mask)
 
 
@@ -211,8 +217,9 @@ class WanCrossAttnProcessor:
         if not hasattr(F, "scaled_dot_product_attention"):
             raise ImportError(
                 "WanAttnProcessor requires PyTorch 2.0. To use it, please upgrade PyTorch to version 2.0 or higher."
-            )
+        )
         self.nash_config = nash_config or NashCaSHConfig()
+        self._historical_anchor = None
         self._authority_call_index = 0
         self.layer_name = layer_name
         
@@ -315,20 +322,42 @@ class WanCrossAttnProcessor:
                 backend=self._attention_backend,
             )
 
-            hidden_states, authority = nash_equilibrium_mix(
-                full_output=full_cross_states,
-                window_output=window_cross_states,
-                full_query=query[1:2],
-                window_query=query[0:1],
-                config=self.nash_config,
-            )
-            log_authority_snapshot(
-                authority=authority,
-                config=self.nash_config,
-                layer_name=self.layer_name,
-                step=None,
-                call_index=self._authority_call_index,
-            )
+            mode = getattr(self.nash_config, "route_mode", "full")
+            use_purification = mode in ("hafp", "full")
+            use_nash = mode in ("nash", "full")
+
+            if use_purification:
+                window_cross_states, self._historical_anchor, pollution = historical_anchor_feature_purification(
+                    native_output=window_cross_states,
+                    native_query=query[0:1],
+                    config=self.nash_config,
+                    previous_anchor=self._historical_anchor,
+                )
+                log_purification_snapshot(
+                    pollution=pollution,
+                    config=self.nash_config,
+                    layer_name=self.layer_name,
+                    step=None,
+                    call_index=self._authority_call_index,
+                )
+
+            if use_nash:
+                hidden_states, authority = nash_equilibrium_mix(
+                    full_output=full_cross_states,
+                    window_output=window_cross_states,
+                    full_query=query[1:2],
+                    window_query=query[0:1],
+                    config=self.nash_config,
+                )
+                log_authority_snapshot(
+                    authority=authority,
+                    config=self.nash_config,
+                    layer_name=self.layer_name,
+                    step=None,
+                    call_index=self._authority_call_index,
+                )
+            else:
+                hidden_states = window_cross_states
             self._authority_call_index += 1
             hidden_states = torch.cat([hidden_states, hidden_states.clone()], dim=0)
 
