@@ -73,7 +73,7 @@ Training-Free High-Resolution Video Generation}
 \end{center}
 
 \begin{abstract}
-Training-free high-resolution video generation requires a pretrained video diffusion model to operate far beyond the spatial token distribution observed during pretraining. The central challenge is not only computational. A high-resolution denoising step must preserve prompt-level structure while recovering native-resolution visual evidence such as facial details, object boundaries, and fine textures. Existing inference-time rules usually resolve this conflict with fixed attention choices or fixed fusion coefficients, which cannot adapt to prompt content, denoising stage, token location, or cache reliability. This paper introduces \method, an equilibrium-guided semantic coordination principle for high-resolution video diffusion. At each cross-attention layer, \method observes two forms of semantic evidence: contextual evidence for scene-level structure and native-grid evidence for high-frequency detail. Their reliability is measured from attention alignment and response confidence, and the final semantic authority is obtained by solving a Nash bargaining objective under a shared authority constraint. The resulting closed-form rule is adaptive, bounded, interpretable, and requires no training, no additional data, and no model-weight modification. We further provide a matched-seed evaluation protocol and ablations to verify whether equilibrium coordination improves 1080P quality, consistency, and runtime compared with fixed inference strategies.
+Training-free high-resolution video generation requires a pretrained video diffusion model to operate far beyond the spatial token distribution observed during pretraining. The central challenge is not only computational. A high-resolution denoising step must preserve prompt-level structure while recovering native-resolution visual evidence such as facial details, object boundaries, and fine textures. Existing inference-time rules usually resolve this conflict with fixed attention choices or fixed fusion coefficients, which cannot adapt to prompt content, denoising stage, token location, or cache reliability. This paper introduces \method, an equilibrium-guided semantic coordination principle for high-resolution video diffusion. At each cross-attention layer, \method observes two forms of semantic evidence: contextual evidence for scene-level structure and native-grid evidence for high-frequency detail. Their reliability is measured from nonnegative query-response alignment and token-relative confidence. The final semantic authority is obtained by solving a disagreement-aware Nash bargaining problem over a shared authority budget. The solution is not merely raw softmax reweighting: it is scale-invariant, proportionally fair over surplus authority, bounded by explicit disagreement points, and has controlled sensitivity to log-reliability noise. The method requires no training, no additional data, and no model-weight modification.
 \end{abstract}
 
 \vspace{1.1em}
@@ -87,17 +87,18 @@ A natural strategy is to use inference-time refinement without retraining the mo
 
 This paper argues that high-resolution refinement should be formulated as a semantic coordination problem. At each cross-attention layer, the denoiser must assign one unit of semantic authority to multiple forms of evidence. This authority determines how strongly each evidence form influences the final hidden representation. Instead of setting this authority by hand, we seek a principle that is adaptive, training-free, and stable during diffusion sampling.
 
-We propose \method, an equilibrium-guided semantic coordination method. The key idea is to treat contextual semantic evidence and native-grid visual evidence as two cooperative terms sharing a constrained semantic resource. Their current reliability is measured from attention behavior: alignment indicates whether an evidence response is compatible with the requesting token, while confidence indicates whether the response is active relative to the layer context. Given these reliability values, \method solves a Nash bargaining objective and obtains a closed-form authority allocation. The solution increases the authority of more reliable evidence while avoiding collapse to a single term when both remain useful.
+We propose \method, an equilibrium-guided semantic coordination method. The key idea is to treat contextual semantic evidence and native-grid visual evidence as two cooperative terms sharing a constrained semantic resource. Their current reliability is measured from attention behavior: nonnegative alignment indicates whether an evidence response is compatible with the requesting token, while token-relative confidence indicates which evidence form is more active at the same location. Given these reliability values, \method solves a disagreement-aware Nash bargaining objective and obtains a closed-form authority allocation. The solution increases the authority of more reliable evidence while preserving minimum authority for both contextual structure and native-grid detail.
 
-This formulation is different from a heuristic weighted sum. The mixture coefficient is not a manually selected constant. It is the equilibrium solution of a defined semantic coordination objective. The method therefore provides a clear rationale for when contextual structure should dominate and when native-grid detail should be trusted. It is also compatible with cached inference: expensive contextual evidence can be reused across denoising steps, while the equilibrium rule still evaluates whether the cached response deserves authority at the current step.
+This formulation is different from a heuristic weighted sum. The mixture coefficient is not a manually selected constant. It is the equilibrium solution of a defined semantic coordination objective with explicit disagreement points. The method therefore provides a clear rationale for when contextual structure should dominate and when native-grid detail should be trusted. It is also compatible with cached inference: expensive contextual evidence can be reused across denoising steps, while the equilibrium rule still evaluates whether the cached response deserves authority at the current step.
 
 \method is designed for practical deployment. It does not finetune the video model, add a learned controller, or require extra annotations. The added computation consists of lightweight reliability observation and a closed-form allocation inside attention layers. This makes the approach suitable for 1080P generation where both quality and runtime matter.
 
 Our contributions are:
 \begin{itemize}
     \item We formulate training-free high-resolution video refinement as equilibrium-guided semantic coordination rather than fixed attention selection.
-    \item We introduce attention-grounded reliability measures based on query-response alignment and response confidence, requiring no learned scoring network.
-    \item We derive a closed-form Nash semantic authority allocation and stabilize it with a bounded mapping suitable for diffusion inference.
+    \item We introduce attention-grounded reliability measures using nonnegative query-response alignment and token-relative confidence, requiring no learned scoring network.
+    \item We derive a closed-form disagreement-aware Nash authority allocation and show scale invariance, proportional fairness, bounded extreme behavior, and log-noise sensitivity.
+    \item We introduce authority momentum to reduce step-to-step authority jitter during cached video refinement.
     \item We provide an experimental protocol, ablations, and visualization design for evaluating 1080P quality, temporal consistency, and runtime under matched seeds.
 \end{itemize}
 
@@ -152,104 +153,128 @@ Both evidence forms are produced by the same pretrained model at inference time.
 
 \subsection{Attention-Grounded Reliability}
 
-The equilibrium rule requires positive reliability values. \method computes them from attention responses directly. For evidence type $x\in\{c,n\}$, let $Q_x(i)$ be the corresponding query tensor and $O_x(i)$ be its candidate response.
+The equilibrium rule requires positive reliability values, but these values should not be learned from additional data. \method computes them directly from the current attention response. For evidence type $x\in\{c,n\}$, let $Q_x(i)$ be the query vector and $O_x(i)$ be the candidate response for token $i$ and one attention head.
 
-First, query-response alignment measures whether the response direction is compatible with the requesting token:
+First, query-response alignment measures whether the response is semantically compatible with the token that requested it:
 \begin{equation}
-    A_x(i)=
-    \frac{1+\cos(\operatorname{vec}(O_x(i)),
-    \operatorname{vec}(Q_x(i)))}{2}.
+    A_x(i)=\max\left(0,\cos(O_x(i),Q_x(i))\right)+\epsilon .
     \label{eq:alignment}
 \end{equation}
-This term lies in $[0,1]$. A high value indicates that the semantic response is directionally consistent with the token representation.
+Unlike a shifted cosine score, negative directions are not treated as medium reliability. A response that points against the query direction is regarded as conflicting evidence and receives near-zero alignment.
 
-Second, response confidence measures whether the response is active relative to the layer context:
+Second, confidence is measured relatively between the two evidence forms at the same token:
 \begin{equation}
+    E_x(i)=\operatorname{RMS}(O_x(i)),\qquad
     C_x(i)=
-    \sigma\left(
-    \frac{\operatorname{RMS}(O_x(i))}
-    {\operatorname{mean}_{j}\operatorname{RMS}(O_x(j))+\epsilon}
-    -1
-    \right).
+    \frac{E_x(i)}
+    {E_c(i)+E_n(i)+\epsilon}.
     \label{eq:confidence}
 \end{equation}
-This term prevents weak responses from receiving high authority only because they are directionally aligned.
+This token-relative confidence avoids the spatial non-stationarity problem of a global RMS mean. A foreground face token and a flat background token are not forced to share the same global activation scale.
 
-The reliability value is
+The final reliability is
 \begin{equation}
     r_x(i)=\pi_x\left(A_x(i)+C_x(i)+\epsilon\right),
     \label{eq:reliability}
 \end{equation}
-where $\pi_x$ is a prior. By default, $\pi_c=1.25$ and $\pi_n=1.0$. The contextual prior protects prompt-level structure, while native-grid evidence can still dominate when its observed reliability is stronger.
+where $\pi_x$ is a weak evidence prior. By default, $\pi_c=1.25$ and $\pi_n=1.0$. This prior protects prompt-level structure, while native-grid evidence can still receive most of the surplus authority when its observed reliability is stronger.
 
-\subsection{Nash Semantic Coordination}
+\subsection{Disagreement-Aware Nash Coordination}
 
-For each token, contextual and native-grid evidence share one unit of semantic authority. The feasible set is
+For each token, contextual and native-grid evidence share one unit of semantic authority. A direct unconstrained allocation can collapse to one evidence form, which is undesirable in high-resolution video refinement: prompt structure and native-grid detail are both necessary. We therefore define a disagreement point $(d_c,d_n)$ with $d_c\geq0$, $d_n\geq0$, and $d_c+d_n<1$. This point represents the minimum authority preserved when bargaining fails. The remaining surplus authority is
 \begin{equation}
-    \Delta=\{(a_c,a_n)\mid a_c>0,\; a_n>0,\; a_c+a_n=1\}.
+    S=1-d_c-d_n.
 \end{equation}
-Let $a_c=a$ and $a_n=1-a$. We define the Nash semantic coordination objective as
-\begin{equation}
-    \max_{a\in(0,1)}
-    r_c(i)\log(a+\epsilon)
-    +
-    r_n(i)\log(1-a+\epsilon).
-    \label{eq:nash}
-\end{equation}
-This objective maximizes the log Nash product under the shared-authority constraint.
+In our implementation, $d_c=a_{\min}$ and $d_n=1-a_{\max}$, so $S=a_{\max}-a_{\min}$.
 
-\begin{proposition}
-Ignoring the small numerical constant $\epsilon$, Eq.~\eqref{eq:nash} has the unique optimum
+The Nash coordination objective is
 \begin{equation}
-    a^*(i)=
+\begin{aligned}
+    \max_{a_c,a_n}\quad&
+    r_c(i)\log(a_c-d_c+\epsilon)
+    +r_n(i)\log(a_n-d_n+\epsilon)\\
+    \text{s.t.}\quad&
+    a_c+a_n=1,\quad a_c>d_c,\quad a_n>d_n .
+\end{aligned}
+    \label{eq:nash_disagreement}
+\end{equation}
+The final response uses $a(i)=a_c(i)$ in Eq.~\eqref{eq:mix}.
+
+\begin{proposition}[Equilibrium authority and proportional fairness]
+Ignoring $\epsilon$, Eq.~\eqref{eq:nash_disagreement} has the unique solution
+\begin{equation}
+    a_c^*(i)=d_c+S
     \frac{r_c(i)}
-    {r_c(i)+r_n(i)}.
-    \label{eq:closed}
+    {r_c(i)+r_n(i)},\qquad
+    a_n^*(i)=d_n+S
+    \frac{r_n(i)}
+    {r_c(i)+r_n(i)} .
+    \label{eq:closed_disagreement}
+\end{equation}
+Moreover, the solution is Pareto efficient, symmetric over the surplus when $r_c=r_n$ and $d_c=d_n$, invariant to common positive rescaling of reliabilities, and proportionally fair:
+\begin{equation}
+    \sum_{x\in\{c,n\}}
+    r_x(i)
+    \frac{a_x-a_x^*}
+    {a_x^*-d_x}
+    \leq 0
+    \quad
+    \text{for any feasible } (a_c,a_n).
+    \label{eq:prop_fair}
 \end{equation}
 \end{proposition}
 
-\noindent\textbf{Proof.}
-The objective is strictly concave because
+\noindent\textbf{Proof sketch.}
+Let $s_x=a_x-d_x$ be surplus authority. The feasible set becomes $s_c+s_n=S$ and $s_x>0$. The objective $\sum_x r_x\log s_x$ is strictly concave, so the KKT conditions are sufficient and necessary. The stationarity condition gives $r_x/s_x=\lambda$, hence $s_x=S r_x/(r_c+r_n)$, yielding Eq.~\eqref{eq:closed_disagreement}. Pareto efficiency follows from using the full authority budget. Symmetry and scale invariance follow directly from Eq.~\eqref{eq:closed_disagreement}. Proportional fairness follows from concavity: for any feasible $s$,
 \begin{equation}
-    \frac{\partial^2}{\partial a^2}
-    \left[
-    r_c\log a+r_n\log(1-a)
-    \right]
-    =
-    -\frac{r_c}{a^2}
-    -\frac{r_n}{(1-a)^2}<0.
+    \nabla\left(\sum_x r_x\log s_x\right)_{s=s^*}^{\top}(s-s^*)\leq 0,
 \end{equation}
-The first-order condition is
-\begin{equation}
-    \frac{r_c}{a}
-    -
-    \frac{r_n}{1-a}=0,
-\end{equation}
-which gives Eq.~\eqref{eq:closed}. Strict concavity makes the solution unique. \hfill $\square$
+which is Eq.~\eqref{eq:prop_fair}. \hfill $\square$
 
-The solution is interpretable. If contextual reliability increases, contextual authority increases. If native-grid reliability increases, native-grid authority increases. Equal reliability values produce equal unconstrained authority. Therefore, the coefficient in Eq.~\eqref{eq:mix} is not a heuristic constant; it is the equilibrium solution of a defined semantic coordination objective.
+\subsection{Why This Is Not Raw Softmax}
 
-\subsection{Bounded Authority Mapping}
+For the special case $d_c=d_n=0$ and $\tau=1$, Eq.~\eqref{eq:closed_disagreement} has the same numerical form as a softmax applied to $\log r_x$. This is an implementation convenience, not the theoretical claim. It differs from directly applying $\operatorname{softmax}(r_c,r_n)$ in three ways.
 
-Unbounded authority may be unstable during diffusion sampling. We therefore temper and bound the equilibrium ratio. First, reliability values are temperature-scaled:
+First, the Nash rule is scale-invariant: multiplying all reliabilities by a positive constant does not change the allocation. Raw softmax lacks this property because $\operatorname{softmax}(\gamma r_c,\gamma r_n)$ becomes sharper as $\gamma$ grows even when the relative evidence has not changed. Second, disagreement points allocate only the surplus authority, preventing collapse to zero contextual or zero native-grid evidence. In the extreme case $r_n/r_c\to\infty$, the contextual authority approaches $d_c$ rather than zero; when $r_c/r_n\to\infty$, it approaches $1-d_n$ rather than one. Third, Eq.~\eqref{eq:prop_fair} gives a proportional-fairness condition: no alternative feasible allocation can improve the reliability-weighted relative authority of one evidence form without a compensating loss to the other. These properties are absent from a heuristic softmax gate unless they are added manually.
+
+Temperature is applied to reliabilities as $\tilde r_x=r_x^{1/\tau}$. With $\theta=\log r_c-\log r_n$, the two-evidence allocation satisfies
 \begin{equation}
-    \tilde{r}_x(i)=r_x(i)^{1/\tau}.
+    a_c^*=d_c+S\sigma(\theta/\tau),\qquad
+    \left|
+    \frac{\partial a_c^*}{\partial \theta}
+    \right|
+    \leq
+    \frac{S}{4\tau}.
+    \label{eq:stability}
 \end{equation}
-Then the equilibrium ratio is
+Thus, the authority map has a bounded sensitivity to multiplicative reliability noise in log space. Smaller surplus $S$ and larger temperature $\tau$ both improve stability, while larger $S$ allows more aggressive adaptation.
+
+\subsection{Temporal Authority Stabilization}
+
+Video refinement should not allow authority maps to fluctuate abruptly across denoising steps. In cached inference, \method therefore applies an exponential moving average to the authority map:
 \begin{equation}
-    q(i)=
-    \frac{\tilde{r}_c(i)}
-    {\tilde{r}_c(i)+\tilde{r}_n(i)+\epsilon}.
-    \label{eq:ratio}
+    \bar a_t(i)=
+    \beta\bar a_{t-1}(i)+(1-\beta)a_t^*(i),
+    \label{eq:momentum}
 \end{equation}
-Finally, the authority is mapped to a stable interval:
+where $\beta\in[0,1)$ is the authority momentum. This step is applied per attention layer, head, and token. It reduces step-to-step authority jitter while preserving the fixed point when the reliability estimates are stable.
+
+\subsection{Multi-Evidence Extension}
+
+Although this paper uses two evidence forms, the formulation naturally extends to $K$ evidence types, such as temporal evidence or style evidence. Let $d_k$ be the disagreement authority and $r_k$ be the reliability of evidence type $k$, with $S=1-\sum_k d_k>0$. The Nash objective
 \begin{equation}
-    a(i)=
-    a_{\min}
-    +(a_{\max}-a_{\min})q(i).
-    \label{eq:bounded}
+    \max_{\{a_k\}}
+    \sum_{k=1}^{K} r_k\log(a_k-d_k)
+    \quad
+    \text{s.t.}\quad
+    \sum_{k=1}^{K}a_k=1,\quad a_k>d_k
 \end{equation}
-The default setting is $a_{\min}=0.65$ and $a_{\max}=0.98$. The lower bound protects prompt-level structure, while the upper bound preserves a minimum native-grid contribution.
+has the closed-form solution
+\begin{equation}
+    a_k^*=d_k+S\frac{r_k}{\sum_j r_j}.
+    \label{eq:multi}
+\end{equation}
+This extension is important conceptually: \method is not tied to a hand-crafted two-way gate. It is a general semantic authority allocation rule.
 
 \subsection{Cache-Compatible Inference}
 
@@ -263,7 +288,8 @@ Contextual evidence can be expensive at high resolution. \method supports cached
 Native-grid evidence remains current, while contextual evidence can be cached. Crucially, cached evidence does not receive fixed authority. Its authority is still determined by Eq.~\eqref{eq:reliability}--Eq.~\eqref{eq:bounded}, so stale contextual responses can be weakened when current native-grid evidence becomes more reliable.
 
 \begin{figure*}[t]
-\placeholderfigure{Replace this box with the final method figure. Recommended layout: prompt and high-resolution latent, contextual semantic evidence, native-grid visual evidence, reliability observation, Nash semantic coordination, final 1080P video.}
+\centering
+\includegraphics[width=\textwidth]{figures/sem_eq_method.pdf}
 \caption{Overview of \method. The method allocates semantic authority between contextual structure and native-grid detail through a Nash equilibrium rule.}
 \label{fig:overview}
 \end{figure*}
@@ -275,7 +301,8 @@ Native-grid evidence remains current, while contextual evidence can be cached. C
     \item Upsample or refine the latent to the target 1080P grid.
     \item At each cross-attention layer, compute contextual response $O_c$ and native-grid response $O_n$.
     \item Compute reliability values $r_c$ and $r_n$ from alignment and confidence.
-    \item Solve the closed-form Nash authority allocation.
+    \item Solve the closed-form disagreement-aware Nash authority allocation.
+    \item Smooth the authority map with momentum during cached refinement.
     \item Fuse the two responses using Eq.~\eqref{eq:mix}.
     \item Continue denoising and decode the final high-resolution video.
 \end{enumerate}
@@ -325,16 +352,18 @@ The most important comparison is between fixed semantic coordination and full \m
 Variant & Imaging & Consistency & Overall \\
 \midrule
 Fixed coordination & \pending & \pending & \pending \\
+Raw softmax over reliabilities & \pending & \pending & \pending \\
 Alignment only & \pending & \pending & \pending \\
 Confidence only & \pending & \pending & \pending \\
 No contextual prior & \pending & \pending & \pending \\
-Unbounded authority & \pending & \pending & \pending \\
+No disagreement point & \pending & \pending & \pending \\
+No authority momentum & \pending & \pending & \pending \\
 Full \method & \pending & \pending & \pending \\
 \bottomrule
 \end{tabular}
 \end{table}
 
-This ablation tests whether the equilibrium formulation is necessary. Removing the Nash rule tests the value of principled semantic coordination. Removing alignment or confidence tests the reliability design. Removing the contextual prior tests whether protecting prompt-level structure is beneficial. Removing bounds tests whether the unconstrained equilibrium is stable enough for diffusion inference.
+This ablation tests whether the equilibrium formulation is necessary. Fixed coordination removes adaptivity. Raw softmax tests whether the Nash objective and disagreement points provide value beyond a direct gate. Removing alignment or confidence tests the reliability design. Removing the contextual prior tests whether protecting prompt-level structure is beneficial. Removing the disagreement point tests whether surplus-only bargaining is more stable than unconstrained allocation. Removing authority momentum tests whether smoothing reduces temporal jitter.
 
 \subsection{Cache Interval Analysis}
 
@@ -368,17 +397,17 @@ Qualitative examples should emphasize the failure modes that the method is desig
 
 \section{Discussion}
 
-\subsection{Why This Is Not Merely a Weighted Sum}
+\subsection{Interpreting the Nash Rule}
 
-At the implementation level, the final cross-attention response is a mixture of two tensors. However, the contribution of this paper is not the existence of a mixture. The contribution is the rule that determines the mixture coefficient. A fixed coefficient is an engineering choice. \method instead defines semantic evidence, reliability values, a feasible authority set, and a Nash objective. The coefficient is the solution to this objective. This gives the method a rationality principle and makes it testable through ablation.
+At the implementation level, the final cross-attention response is a mixture of two tensors. The contribution is the rule that determines the authority coefficient. \method does not claim that any normalized gate is automatically a Nash solution. Instead, it defines semantic evidence, nonnegative reliabilities, disagreement authority, a feasible surplus set, and a Nash objective. This distinction matters because the resulting rule is invariant to common reliability scaling, allocates only the surplus authority, satisfies proportional fairness, and has bounded sensitivity in log-reliability space. A raw softmax gate can be included as an ablation, but it does not provide these properties unless they are imposed externally.
 
 \subsection{Limitations}
 
-\method depends on the quality of its reliability observation. Alignment and confidence are efficient and available inside attention layers, but they may not capture all forms of semantic reliability. Future work could include temporal reliability, motion-aware evidence, prompt-token saliency, or uncertainty estimation. The method also assumes that both evidence forms are meaningful. When the pretrained model lacks the ability to represent a concept, equilibrium coordination cannot recover missing knowledge.
+\method depends on the quality of its reliability observation. Nonnegative alignment avoids assigning high reliability to directionally conflicting responses, and token-relative confidence reduces global foreground/background bias. Nevertheless, these two cues may not capture all forms of semantic reliability. Authority momentum reduces step-to-step jitter, but it is not a full temporal correspondence model across moving objects. Future work could add explicit temporal evidence as a third evidence type using Eq.~\eqref{eq:multi}. The disagreement point is also a design choice: it encodes a minimum level of contextual and native-grid authority and should be reported with ablations. When the pretrained model lacks the ability to represent a concept, equilibrium coordination cannot recover missing knowledge.
 
 \section{Conclusion}
 
-We presented \method, an equilibrium-guided semantic coordination method for training-free high-resolution video generation. The method treats contextual structure and native-grid detail as complementary evidence forms sharing one unit of semantic authority. Their reliability is computed directly from attention behavior, and the final authority is obtained through a closed-form Nash bargaining solution. This provides a principled alternative to fixed inference rules, remains compatible with cached 1080P refinement, and offers a clear experimental path for validating equilibrium coordination in high-resolution video synthesis.
+We presented \method, an equilibrium-guided semantic coordination method for training-free high-resolution video generation. The method treats contextual structure and native-grid detail as complementary evidence forms sharing one unit of semantic authority. Their reliability is computed directly from attention behavior, and the final authority is obtained through a disagreement-aware Nash bargaining solution. The resulting rule is scale-invariant, proportionally fair over surplus authority, stable under bounded log-reliability perturbations, and compatible with cached 1080P refinement. This provides a principled alternative to fixed inference rules and direct softmax gating.
 
 \begin{thebibliography}{99}
 

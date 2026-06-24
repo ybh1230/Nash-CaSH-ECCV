@@ -22,6 +22,7 @@ Nash-CaSH is a training-free high-resolution video generation method. It combine
 - `scripts/run_visual_suite.py`: qualitative prompt-suite runner for Nash-CaSH and fixed baseline.
 - `scripts/extract_visual_evidence.py`: frame/crop/contact-sheet extractor for paper figures.
 - `scripts/summarize_vbench_results.py`: helper for aggregating VBench JSON outputs.
+- `scripts/plot_authority_heatmaps.py`: plots token/step and spatial heatmaps of the Nash authority map `a(i)`.
 - `experiments/nash_cash_protocol.md`: evaluation protocol.
 - `experiments/visual_prompts.json`: 8-prompt qualitative suite from the provided figure/case-study prompts.
 - `experiments/visualization_protocol.md`: qualitative figure and supporting-metric protocol.
@@ -89,3 +90,35 @@ python scripts/extract_visual_evidence.py --video_root outputs/visual_suite --me
 ```
 
 The generated contact sheets are saved under `outputs/visual_evidence/sheets/`. See `experiments/visualization_protocol.md` for the full workflow and reporting language.
+
+## Authority Heatmaps
+
+To visualize whether semantic authority changes across tokens and denoising steps, enable compressed authority logging during inference:
+
+```bash
+python inference.py \
+  --mode cache \
+  --target_height 1088 \
+  --target_width 1920 \
+  --cache_steps 2 \
+  --seed 2026 \
+  --authority_log_dir outputs/authority_logs/fig2_elderly \
+  --authority_log_stride 4 \
+  --authority_log_token_stride 256 \
+  --output outputs/fig2_elderly_authority.mp4
+```
+
+Then render the heatmaps:
+
+```bash
+python scripts/plot_authority_heatmaps.py \
+  --log_dir outputs/authority_logs/fig2_elderly \
+  --output_dir outputs/authority_logs/fig2_elderly/plots
+```
+
+The key outputs are:
+
+- `authority_step_token_heatmap.png`: denoising step by sampled token heatmap of `a(i)`.
+- `authority_spatial_montage.png`: downsampled spatial authority maps.
+- `authority_step_mean_curve.png`: mean contextual authority over denoising.
+- `authority_summary.csv`: per-layer summary statistics.

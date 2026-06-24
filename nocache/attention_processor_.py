@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from diffusers.models.attention_dispatch import dispatch_attention_fn
 from functools import partial, lru_cache
 from torch.nn.attention.flex_attention import create_block_mask, flex_attention
-from nash_cash import NashCaSHConfig, nash_equilibrium_mix
+from nash_cash import NashCaSHConfig, log_authority_snapshot, nash_equilibrium_mix
 create_block_mask = torch.compile(create_block_mask)
 
 
@@ -207,12 +207,14 @@ class WanFlexAttnProcessor_:
 class WanCrossAttnProcessor:
     _attention_backend = None
 
-    def __init__(self, nash_config: Optional[NashCaSHConfig] = None):
+    def __init__(self, nash_config: Optional[NashCaSHConfig] = None, layer_name: str = "cross_attn"):
         if not hasattr(F, "scaled_dot_product_attention"):
             raise ImportError(
                 "WanAttnProcessor requires PyTorch 2.0. To use it, please upgrade PyTorch to version 2.0 or higher."
             )
         self.nash_config = nash_config or NashCaSHConfig()
+        self._authority_call_index = 0
+        self.layer_name = layer_name
         
     def __call__(
         self,
@@ -313,13 +315,21 @@ class WanCrossAttnProcessor:
                 backend=self._attention_backend,
             )
 
-            hidden_states, _ = nash_equilibrium_mix(
+            hidden_states, authority = nash_equilibrium_mix(
                 full_output=full_cross_states,
                 window_output=window_cross_states,
                 full_query=query[1:2],
                 window_query=query[0:1],
                 config=self.nash_config,
             )
+            log_authority_snapshot(
+                authority=authority,
+                config=self.nash_config,
+                layer_name=self.layer_name,
+                step=None,
+                call_index=self._authority_call_index,
+            )
+            self._authority_call_index += 1
             hidden_states = torch.cat([hidden_states, hidden_states.clone()], dim=0)
 
 

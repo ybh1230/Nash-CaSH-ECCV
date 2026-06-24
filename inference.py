@@ -30,6 +30,12 @@ parser.add_argument('--nash_ceiling', type=float, default=0.98, help="Maximum fu
 parser.add_argument('--nash_temperature', type=float, default=1.0, help="Temperature for Nash-CaSH payoff allocation")
 parser.add_argument('--nash_full_prior', type=float, default=1.25, help="Prior payoff multiplier for global full-attention branch")
 parser.add_argument('--nash_window_prior', type=float, default=1.0, help="Prior payoff multiplier for local window-attention branch")
+parser.add_argument('--nash_authority_momentum', type=float, default=0.10, help="EMA momentum for cached authority maps")
+parser.add_argument('--authority_log_dir', type=str, default=None, help="Optional directory for compressed authority-map logs")
+parser.add_argument('--authority_log_stride', type=int, default=1, help="Save one authority snapshot every N cross-attention calls")
+parser.add_argument('--authority_log_token_stride', type=int, default=256, help="Sample one token every N tokens for step-token heatmaps")
+parser.add_argument('--authority_log_map_height', type=int, default=48, help="Output height for downsampled spatial authority maps")
+parser.add_argument('--authority_log_map_width', type=int, default=84, help="Output width for downsampled spatial authority maps")
 args = parser.parse_args()
 
 if args.mode == 'cache':
@@ -116,12 +122,21 @@ nash_config = NashCaSHConfig(
     temperature=args.nash_temperature,
     full_prior=args.nash_full_prior,
     window_prior=args.nash_window_prior,
+    authority_momentum=args.nash_authority_momentum,
+    authority_log_dir=args.authority_log_dir,
+    authority_log_stride=args.authority_log_stride,
+    authority_log_token_stride=args.authority_log_token_stride,
+    authority_log_map_height=args.authority_log_map_height,
+    authority_log_map_width=args.authority_log_map_width,
+    authority_latent_frames=1 + (num_frames - 1) // 4,
+    authority_latent_height=args.target_height // 16,
+    authority_latent_width=args.target_width // 16,
 )
 
 attn_processors = {}
 for k in pipe_v2v.transformer.attn_processors.keys():
     if 'attn2' in k:
-        attn_processors[k] = WanCrossAttnProcessor(nash_config=nash_config)
+        attn_processors[k] = WanCrossAttnProcessor(nash_config=nash_config, layer_name=k)
     else:
         attn_processors[k] = WanFlexAttnProcessor_()
 pipe_v2v.transformer.set_attn_processor(attn_processors)
