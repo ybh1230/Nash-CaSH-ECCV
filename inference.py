@@ -24,7 +24,6 @@ parser.add_argument('--prompt_file', type=str, default=None, help="Optional text
 parser.add_argument('--negative_prompt', type=str, default="repeating patterns, Blurry face, low detail, distorted features, extra limbs, cartoon style, smooth plastic skin, low resolution, flat colors, lack of texture", help="Negative prompt")
 parser.add_argument('--negative_prompt_file', type=str, default=None, help="Optional text file containing the negative prompt")
 parser.add_argument('--seed', type=int, default=None, help="Random seed for reproducible visual comparisons")
-parser.add_argument('--nash_cash', action=argparse.BooleanOptionalAction, default=True, help="Enable Nash-CaSH cross-attention bargaining")
 parser.add_argument('--nash_floor', type=float, default=0.65, help="Minimum full-branch share in Nash-CaSH")
 parser.add_argument('--nash_ceiling', type=float, default=0.98, help="Maximum full-branch share in Nash-CaSH")
 parser.add_argument('--nash_temperature', type=float, default=1.0, help="Temperature for Nash-CaSH payoff allocation")
@@ -116,7 +115,6 @@ pipe_v2v.scheduler.config.flow_shift = args.flow_shift
 del init_mask_flex
 
 nash_config = NashCaSHConfig(
-    enabled=args.nash_cash,
     floor=args.nash_floor,
     ceiling=args.nash_ceiling,
     temperature=args.nash_temperature,

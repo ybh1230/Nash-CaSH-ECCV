@@ -19,7 +19,6 @@ $common = @(
     "--prompt", $prompt
 )
 
-python inference.py @common --mode nocache --no-nash_cash --output "$OutputDir\baseline_override.mp4"
-python inference.py @common --mode nocache --nash_cash --output "$OutputDir\nash_cash_nocache.mp4"
-python inference.py @common --mode cache --cache_steps $CacheSteps --nash_cash --output "$OutputDir\nash_cash_cache_p$CacheSteps.mp4"
-python inference.py @common --mode cache --cache_steps 5 --nash_cash --output "$OutputDir\nash_cash_cache_p5.mp4"
+python inference.py @common --mode nocache --output "$OutputDir\sem_eq_nocache.mp4"
+python inference.py @common --mode cache --cache_steps $CacheSteps --output "$OutputDir\sem_eq_cache_p$CacheSteps.mp4"
+python inference.py @common --mode cache --cache_steps 5 --output "$OutputDir\sem_eq_cache_p5.mp4"

@@ -1,15 +1,10 @@
-# Nash-CaSH Visualization Protocol
+# SemEq Visualization Protocol
 
 This protocol is for qualitative figures and small supporting measurements. It is not a replacement for the 60-prompt VBench table.
 
 ## Goal
 
-The visualization section should demonstrate the Nash semantic-authority idea without adding a large amount of extra generation. We compare:
-
-- `fixed`: fixed authority allocation using `--no-nash_cash`.
-- `nash_cash`: Nash semantic authority allocation using the default Nash-CaSH settings.
-
-Both methods must use the same prompt, seed, resolution, cache interval, and model version.
+The visualization section should demonstrate the Nash semantic-authority idea without adding a large amount of extra generation. The public method code runs the full SemEq method only. Baseline outputs for paper comparisons should be generated from separate experiment code or a controlled historical commit, so the main repository remains focused on the proposed method.
 
 ## Prompt Suite
 
@@ -34,7 +29,6 @@ For a fast but useful comparison:
 python scripts/run_visual_suite.py \
   --prompts experiments/visual_prompts.json \
   --output_dir outputs/visual_suite \
-  --methods nash_cash fixed \
   --target_height 720 \
   --target_width 1280 \
   --cache_steps 2 \
@@ -48,7 +42,6 @@ For final paper figures, rerun the strongest 3 or 4 prompts at 1080P:
 python scripts/run_visual_suite.py \
   --prompts experiments/visual_prompts.json \
   --output_dir outputs/visual_suite_1080p \
-  --methods nash_cash fixed \
   --target_height 1088 \
   --target_width 1920 \
   --cache_steps 2 \
@@ -64,7 +57,7 @@ After generation:
 python scripts/extract_visual_evidence.py \
   --prompts experiments/visual_prompts.json \
   --video_root outputs/visual_suite \
-  --methods fixed nash_cash \
+  --methods sem_eq \
   --out_dir outputs/visual_evidence
 ```
 
@@ -83,7 +76,7 @@ For visual-suite videos, run the six custom-input metrics one dimension at a tim
 for DIM in subject_consistency background_consistency motion_smoothness dynamic_degree aesthetic_quality imaging_quality
 do
   vbench evaluate \
-    --videos_path outputs/visual_suite/nash_cash \
+    --videos_path outputs/visual_suite/sem_eq \
     --mode custom_input \
     --dimension "$DIM" \
     --output_path vbench_visual_results

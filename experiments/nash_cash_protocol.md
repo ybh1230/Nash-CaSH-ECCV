@@ -1,6 +1,6 @@
-# Nash-CaSH Experiment Protocol
+# SemEq Experiment Protocol
 
-This protocol is for the new Nash-CaSH submission. Do not claim improvement until all rows are evaluated with fixed prompts, fixed seeds, official metrics, and matched runtime settings.
+This protocol is for the new SemEq submission. Do not claim improvement until all rows are evaluated with fixed prompts, fixed seeds, official metrics, and matched runtime settings.
 
 ## Main 1080P Setting
 
@@ -16,21 +16,18 @@ This protocol is for the new Nash-CaSH submission. Do not claim improvement unti
 
 ## Rows To Run
 
-- Native high-resolution inference.
-- Local-window only.
-- Global full-attention only when feasible.
-- Fixed local-global override: `--no-nash_cash`.
-- Nash-CaSH without cache: `--mode nocache --nash_cash`.
-- Nash-CaSH with cache: `--mode cache --cache_steps 2 --nash_cash`.
-- Nash-CaSH cache sweep: `--cache_steps 5` and `--cache_steps 8`.
+- SemEq without cache: `--mode nocache`.
+- SemEq with cache: `--mode cache --cache_steps 2`.
+- SemEq cache sweep: `--cache_steps 5` and `--cache_steps 8`.
+- External baselines should be generated from their own code or a controlled historical commit, not from this cleaned method-only entry point.
 
 ## Required Ablations
 
-- Nash disabled versus enabled.
 - Nash floor: 0.55, 0.65, 0.75.
 - Nash ceiling: 0.90, 0.98, 1.00.
 - Global prior: 1.0, 1.25, 1.5.
 - Local prior: 0.75, 1.0, 1.25.
+- Authority momentum: 0.0, 0.10, 0.25.
 - Cache interval: 2, 5, 8.
 
 ## Reporting Rules

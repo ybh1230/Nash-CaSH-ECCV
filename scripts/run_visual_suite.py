@@ -21,8 +21,8 @@ def write_prompt_file(prompt_dir: Path, prompt_id: str, prompt: str) -> Path:
     return prompt_path
 
 
-def run_one(args, prompt_item, method_name: str, nash_enabled: bool):
-    output_dir = Path(args.output_dir) / method_name
+def run_one(args, prompt_item):
+    output_dir = Path(args.output_dir) / args.method_name
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"{prompt_item['id']}.mp4"
     if output_path.exists() and not args.overwrite:
@@ -48,16 +48,15 @@ def run_one(args, prompt_item, method_name: str, nash_enabled: bool):
         "--output",
         str(output_path),
     ]
-    cmd.append("--nash_cash" if nash_enabled else "--no-nash_cash")
     print("[run]", " ".join(cmd))
     subprocess.run(cmd, check=True)
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Run the qualitative Nash-CaSH visual suite.")
+    parser = argparse.ArgumentParser(description="Run the qualitative SemEq visual suite.")
     parser.add_argument("--prompts", default="experiments/visual_prompts.json")
     parser.add_argument("--output_dir", default="outputs/visual_suite")
-    parser.add_argument("--methods", nargs="+", default=["nash_cash", "fixed"])
+    parser.add_argument("--method_name", default="sem_eq", help="Output subdirectory name for the full method")
     parser.add_argument("--ids", nargs="*", default=None, help="Optional prompt ids to run")
     parser.add_argument("--max_prompts", type=int, default=None, help="Optional maximum number of prompts to run")
     parser.add_argument("--mode", choices=["cache", "nocache"], default="cache")
@@ -74,17 +73,8 @@ def main():
         prompts = [item for item in prompts if item["id"] in wanted]
     if args.max_prompts is not None:
         prompts = prompts[: args.max_prompts]
-    method_flags = {
-        "nash_cash": True,
-        "fixed": False,
-    }
-    for method_name in args.methods:
-        if method_name not in method_flags:
-            raise ValueError(f"Unknown method {method_name}. Use one of {sorted(method_flags)}")
-
     for item in prompts:
-        for method_name in args.methods:
-            run_one(args, item, method_name, method_flags[method_name])
+        run_one(args, item)
 
 
 if __name__ == "__main__":

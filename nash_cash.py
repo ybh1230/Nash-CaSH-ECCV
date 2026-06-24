@@ -9,7 +9,6 @@ import torch.nn.functional as F
 
 @dataclass(frozen=True)
 class NashCaSHConfig:
-    enabled: bool = True
     floor: float = 0.65
     ceiling: float = 0.98
     temperature: float = 1.0
@@ -140,7 +139,7 @@ def nash_equilibrium_mix(
     if config is None:
         config = NashCaSHConfig()
 
-    if not config.enabled or full_output.shape != window_output.shape:
+    if full_output.shape != window_output.shape:
         return full_output, None
 
     eps = max(float(config.eps), 1e-12)

@@ -78,7 +78,7 @@ def main():
     parser = argparse.ArgumentParser(description="Extract frames, crops, and contact sheets for qualitative evidence.")
     parser.add_argument("--prompts", default="experiments/visual_prompts.json")
     parser.add_argument("--video_root", default="outputs/visual_suite")
-    parser.add_argument("--methods", nargs="+", default=["fixed", "nash_cash"])
+    parser.add_argument("--methods", nargs="+", default=["sem_eq"])
     parser.add_argument("--out_dir", default="outputs/visual_evidence")
     parser.add_argument("--cell_height", type=int, default=220)
     args = parser.parse_args()
