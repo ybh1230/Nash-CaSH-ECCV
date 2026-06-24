@@ -52,7 +52,21 @@ def write_summary(records, output_dir: Path, prefix: str):
         writer.writerows(rows)
 
 
-def plot_step_token(records, output_dir: Path, max_rows: int, prefix: str, label: str):
+def color_limits(tensors, auto_contrast: bool):
+    if not auto_contrast:
+        return 0.0, 1.0
+    flat = torch.cat([t.flatten().float() for t in tensors if t is not None and t.numel() > 0])
+    if flat.numel() == 0:
+        return 0.0, 1.0
+    vmin = float(torch.quantile(flat, 0.02).item())
+    vmax = float(torch.quantile(flat, 0.98).item())
+    if vmax - vmin < 1e-6:
+        center = 0.5 * (vmin + vmax)
+        return center - 0.01, center + 0.01
+    return vmin, vmax
+
+
+def plot_step_token(records, output_dir: Path, max_rows: int, prefix: str, label: str, auto_contrast: bool):
     groups = defaultdict(list)
     for idx, rec in enumerate(records):
         key = rec.get("step")
@@ -81,8 +95,9 @@ def plot_step_token(records, output_dir: Path, max_rows: int, prefix: str, label
     if matrix is None:
         return
 
+    vmin, vmax = color_limits([matrix], auto_contrast)
     fig, ax = plt.subplots(figsize=(10.5, 5.2))
-    im = ax.imshow(matrix.numpy(), aspect="auto", cmap="viridis", vmin=0.0, vmax=1.0)
+    im = ax.imshow(matrix.numpy(), aspect="auto", cmap="viridis", vmin=vmin, vmax=vmax)
     ax.set_title(f"{label}: Denoising Step x Sampled Token")
     ax.set_xlabel("sampled token index")
     ax.set_ylabel("denoising step")
@@ -96,11 +111,12 @@ def plot_step_token(records, output_dir: Path, max_rows: int, prefix: str, label
     cbar = fig.colorbar(im, ax=ax, fraction=0.026, pad=0.02)
     cbar.set_label(label)
     fig.tight_layout()
-    fig.savefig(output_dir / f"{prefix}_step_token_heatmap.png", dpi=220)
+    suffix = "_contrast" if auto_contrast else ""
+    fig.savefig(output_dir / f"{prefix}_step_token_heatmap{suffix}.png", dpi=220)
     plt.close(fig)
 
 
-def plot_spatial_montage(records, output_dir: Path, max_panels: int, prefix: str, label: str):
+def plot_spatial_montage(records, output_dir: Path, max_panels: int, prefix: str, label: str, auto_contrast: bool):
     groups = defaultdict(list)
     for idx, rec in enumerate(records):
         spatial = rec.get("spatial_map")
@@ -129,6 +145,7 @@ def plot_spatial_montage(records, output_dir: Path, max_panels: int, prefix: str
         maps = [maps[i] for i in keep]
         labels = [labels[i] for i in keep]
 
+    vmin, vmax = color_limits(maps, auto_contrast)
     cols = min(3, len(maps))
     rows = (len(maps) + cols - 1) // cols
     fig, axes = plt.subplots(rows, cols, figsize=(4.2 * cols, 3.0 * rows), squeeze=False)
@@ -136,16 +153,17 @@ def plot_spatial_montage(records, output_dir: Path, max_panels: int, prefix: str
         ax.axis("off")
 
     last_im = None
-    for ax, label, spatial in zip(axes.flat, labels, maps):
-        last_im = ax.imshow(spatial.numpy(), cmap="viridis", vmin=0.0, vmax=1.0)
-        ax.set_title(f"step {label}")
+    for ax, step_label, spatial in zip(axes.flat, labels, maps):
+        last_im = ax.imshow(spatial.numpy(), cmap="viridis", vmin=vmin, vmax=vmax)
+        ax.set_title(f"step {step_label}")
         ax.axis("off")
 
     if last_im is not None:
         cbar = fig.colorbar(last_im, ax=axes.ravel().tolist(), fraction=0.025, pad=0.02)
         cbar.set_label(label)
     fig.suptitle(f"Spatial {label} Maps", y=0.98)
-    fig.savefig(output_dir / f"{prefix}_spatial_montage.png", dpi=220, bbox_inches="tight")
+    suffix = "_contrast" if auto_contrast else ""
+    fig.savefig(output_dir / f"{prefix}_spatial_montage{suffix}.png", dpi=220, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -183,6 +201,8 @@ def main():
     parser.add_argument("--log_dir", required=True, help="Directory containing authority_*.pt files")
     parser.add_argument("--output_dir", default=None, help="Directory for plotted heatmaps")
     parser.add_argument("--kind", choices=["authority", "purification"], default="authority")
+    parser.add_argument("--layer_contains", default=None, help="Only plot records whose layer name contains this text, e.g. blocks.8.")
+    parser.add_argument("--auto_contrast", action="store_true", help="Use percentile color limits instead of the fixed 0..1 range")
     parser.add_argument("--max_rows", type=int, default=80, help="Maximum rows in the step-token heatmap")
     parser.add_argument("--max_spatial_panels", type=int, default=6, help="Maximum spatial maps in the montage")
     args = parser.parse_args()
@@ -198,14 +218,16 @@ def main():
     for path in sorted(log_dir.glob(f"{prefix}_*.pt")):
         rec = load_record(path)
         rec["file"] = path.name
+        if args.layer_contains and args.layer_contains not in str(rec.get("layer", "")):
+            continue
         records.append(rec)
 
     if not records:
         raise SystemExit(f"No {prefix}_*.pt files found in {log_dir}")
 
     write_summary(records, output_dir, prefix=prefix)
-    plot_step_token(records, output_dir, max_rows=args.max_rows, prefix=prefix, label=label)
-    plot_spatial_montage(records, output_dir, max_panels=args.max_spatial_panels, prefix=prefix, label=label)
+    plot_step_token(records, output_dir, max_rows=args.max_rows, prefix=prefix, label=label, auto_contrast=args.auto_contrast)
+    plot_spatial_montage(records, output_dir, max_panels=args.max_spatial_panels, prefix=prefix, label=label, auto_contrast=args.auto_contrast)
     plot_mean_curve(records, output_dir, prefix=prefix, label=label)
     print(f"Wrote {prefix} plots to {output_dir}")
 
